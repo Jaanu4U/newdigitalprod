@@ -1,0 +1,57 @@
+# Wildcard org portal for *.digitalchain.in over HTTPS
+# Requires a wildcard TLS cert for *.digitalchain.in
+
+upstream org_portal {
+    server 127.0.0.1:3100;  # Next.js org portal service (change if needed)
+    keepalive 64;
+}
+
+map $host $org_subdomain {
+    ~^(?<sub>[^.]+)\.digitalchain\.in$ $sub;
+    default "";
+}
+
+# Optional: block reserved subdomains here and let other server{} handle them
+map $org_subdomain $is_reserved {
+    default 0;
+    admin 1;
+    api 1;
+    www 1;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name .digitalchain.in;  # wildcard
+
+    ssl_certificate     /etc/letsencrypt/live/digitalchain.in/fullchain.pem;       # wildcard cert
+    ssl_certificate_key /etc/letsencrypt/live/digitalchain.in/privkey.pem;
+
+    # Only handle non-reserved subdomains
+    if ($is_reserved) { return 444; }
+
+    # Static Next.js assets (optional if portal serves them itself)
+    location /_next/static/ {
+        proxy_cache_valid 200 120m;
+        expires 14d;
+        add_header Cache-Control "public, max-age=1209600, immutable";
+        proxy_pass http://org_portal;
+    }
+
+    location / {
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Org $org_subdomain;  # pass tenant to app
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_pass http://org_portal;
+    }
+}
+
+# HTTP → HTTPS redirect for wildcard (optional)
+server {
+    listen 80;
+    server_name .digitalchain.in;
+    return 301 https://$host$request_uri;
+}

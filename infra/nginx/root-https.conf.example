@@ -1,0 +1,41 @@
+# HTTPS for root domain digitalchain.in (marketing + signup)
+# Use a certificate that includes both digitalchain.in and *.digitalchain.in (SAN)
+
+upstream portal_root {
+    server 127.0.0.1:3100;  # Next.js portal service
+    keepalive 64;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name digitalchain.in www.digitalchain.in;
+
+    # Certificate should cover digitalchain.in (and ideally *.digitalchain.in)
+    ssl_certificate     /etc/letsencrypt/live/digitalchain.in/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/digitalchain.in/privkey.pem;
+
+    # Static Next.js assets passthrough (portal serves them)
+    location /_next/static/ {
+        proxy_cache_valid 200 120m;
+        expires 14d;
+        add_header Cache-Control "public, max-age=1209600, immutable";
+        proxy_pass http://portal_root;
+    }
+
+    location / {
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_pass http://portal_root;
+    }
+}
+
+# HTTP → HTTPS redirect for root
+server {
+    listen 80;
+    server_name digitalchain.in www.digitalchain.in;
+    return 301 https://$host$request_uri;
+}

@@ -1,0 +1,5 @@
+# Cloudflare API token for Certbot DNS-01
+# Create a token with Zone:DNS Edit permission (restrict to the digitalchain.in zone)
+# https://dash.cloudflare.com/profile/api-tokens
+
+dns_cloudflare_api_token = YOUR_CLOUDFLARE_API_TOKEN_HERE

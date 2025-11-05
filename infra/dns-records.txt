@@ -1,0 +1,30 @@
+# DNS Records for digitalchain.in
+# Create these at your DNS provider
+
+Type  Host                   Value            TTL
+A     digitalchain.in         103.49.131.101   300
+A     api.digitalchain.in     103.49.131.101   300
+A     admin.digitalchain.in   103.49.131.101   300
+
+# Option A (recommended): wildcard for org subdomains
+# Covers https://<org>.digitalchain.in for any org without adding per-org DNS
+# Note: still recommended to use a wildcard TLS cert (*.digitalchain.in)
+# A     *.digitalchain.in      103.49.131.101   300
+
+# Option B: maintain each org subdomain explicitly (your preference)
+# Add one A record per org pointing to the same server IP
+# Example orgs:
+A     acme.digitalchain.in    103.49.131.101   300
+# A   beta.digitalchain.in    103.49.131.101   300
+# A   gamma.digitalchain.in   103.49.131.101   300
+
+# Notes:
+# - Specific records (acme.digitalchain.in) override wildcard (*.digitalchain.in) if both exist.
+# - TLS: Use a wildcard certificate for *.digitalchain.in to avoid issuing a new cert per org.
+# - Reserved subdomains: admin, api, www
+
+# Optional IPv6 (if your server has IPv6 configured)
+# AAAA  digitalchain.in         <YOUR_IPV6>   300
+# AAAA  api.digitalchain.in     <YOUR_IPV6>   300
+# AAAA  admin.digitalchain.in   <YOUR_IPV6>   300
+# AAAA  *.digitalchain.in       <YOUR_IPV6>   300

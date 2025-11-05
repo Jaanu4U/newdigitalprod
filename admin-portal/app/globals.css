@@ -1,0 +1,63 @@
+@import "tailwindcss";
+
+/* Base light background */
+:root { --bg: 245 245 245; }
+html, body { height: 100%; }
+body { background-color: rgb(var(--bg)); }
+
+/* Ensure brand background utilities exist even if Tailwind theme extension fails to load */
+:root {
+	--brand-600: #2563eb; /* matches theme.extend.colors.brand.600 */
+	--brand-700: #1d4ed8; /* matches theme.extend.colors.brand.700 */
+}
+.bg-brand-600 { background-color: var(--brand-600) !important; }
+.hover\:bg-brand-700:hover { background-color: var(--brand-700) !important; }
+.text-brand-600 { color: var(--brand-600) !important; }
+
+/* Global button styles */
+button, [type="button"], [type="submit"], a[role="button"], .btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 0.5rem; /* 8px */
+	border-radius: 0.375rem; /* rounded-md */
+	padding: 0.5rem 1rem; /* py-2 px-4 */
+	font-size: 0.875rem; /* text-sm */
+	font-weight: 500; /* font-medium */
+	transition: background-color 150ms linear, color 150ms linear, border-color 150ms linear, box-shadow 150ms linear;
+}
+
+button:disabled, [type="button"]:disabled, [type="submit"]:disabled, a[role="button"].disabled, .btn.disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+
+/* Variants */
+.btn-primary {
+	background-color: #2563eb; /* brand-600 */
+	color: #ffffff;
+}
+.btn-primary:hover { background-color: #1d4ed8; /* brand-700 */ }
+
+.btn-secondary {
+	background-color: #ffffff;
+	color: #1f2937; /* gray-800 */
+	border: 1px solid #d1d5db; /* gray-300 */
+}
+.btn-secondary:hover { background-color: #f9fafb; /* gray-50 */ }
+
+.btn-ghost {
+	background-color: transparent;
+	color: #374151; /* gray-700 */
+}
+.btn-ghost:hover { background-color: #f3f4f6; /* gray-100 */ }
+
+.btn-danger { background-color: #dc2626; color: #ffffff; }
+.btn-danger:hover { background-color: #b91c1c; }
+
+.btn-success { background-color: #16a34a; color: #ffffff; }
+.btn-success:hover { background-color: #15803d; }
+
+.btn-sm { padding: 0.375rem 0.75rem; font-size: 0.75rem; }
+.btn-lg { padding: 0.75rem 1.25rem; font-size: 1rem; }
+.btn-icon { padding: 0.5rem; border-radius: 0.375rem; }
