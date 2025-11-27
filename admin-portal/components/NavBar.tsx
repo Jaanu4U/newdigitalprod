@@ -1,20 +1,26 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { Bell, Settings, LogOut, User } from "lucide-react";
 import Link from "next/link";
+
+interface Notification {
+  id: number;
+  title: string;
+  message: string;
+  time: string;
+  unread: boolean;
+}
 
 export default function NavBar() {
   const [email, setEmail] = useState<string | null>(null);
   const [role, setRole] = useState<string | null>(null);
   const [orgName, setOrgName] = useState<string | null>(null);
-  const [notifications, setNotifications] = useState(3);
+  const [notifications, setNotifications] = useState(0);
   const [showNotifications, setShowNotifications] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
-  const [notificationList, setNotificationList] = useState([
-    { id: 1, title: "New Order #1234", message: "Order received from John Doe", time: "5 min ago", unread: true },
-    { id: 2, title: "Payment Confirmed", message: "Payment of $150 received", time: "1 hour ago", unread: true },
-    { id: 3, title: "Delivery Complete", message: "Order #1230 delivered successfully", time: "2 hours ago", unread: true },
-  ]);
+  const [notificationList, setNotificationList] = useState<Notification[]>([]);
+  const wsRef = useRef<WebSocket | null>(null);
+  const nextIdRef = useRef(1);
 
   useEffect(() => {
     try {
@@ -22,6 +28,95 @@ export default function NavBar() {
       setRole(localStorage.getItem("dc_role"));
       setOrgName(localStorage.getItem("dc_org"));
     } catch {}
+
+    // Set up WebSocket for real-time notifications
+    const token = localStorage.getItem('dc_access');
+    if (!token) return;
+
+    const ws = new WebSocket(`wss://api.digitalchain.in/ws?token=${token}`);
+
+    ws.onopen = () => {
+      console.log('🔔 Notification WebSocket connected');
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const message = JSON.parse(event.data);
+        console.log('🔔 Received notification:', message);
+
+        let title = '';
+        let text = '';
+
+        // Create notification based on message type
+        switch (message.type) {
+          case 'pod_uploaded':
+            title = 'POD Uploaded';
+            text = `Proof of delivery uploaded for ${message.data.invoice_no}`;
+            break;
+          case 'delivery_completed':
+            title = 'Delivery Completed';
+            text = `Order ${message.data.invoice_no} has been delivered`;
+            break;
+          case 'order_status_update':
+            title = 'Order Status Update';
+            text = `Order ${message.data.invoice_no} is now ${message.data.status}`;
+            if (message.data.rider_name) {
+              text += ` by ${message.data.rider_name}`;
+            }
+            break;
+          case 'payment_confirmed':
+            title = 'Payment Confirmed';
+            text = `Payment received for order ${message.data.order_id || message.data.invoice_no}`;
+            break;
+          case 'rider_location_update':
+            // Don't show notification for location updates
+            return;
+          default:
+            title = 'New Update';
+            text = message.data?.message || 'You have a new notification';
+        }
+
+        // Add notification to list
+        const newNotification: Notification = {
+          id: nextIdRef.current++,
+          title,
+          message: text,
+          time: 'Just now',
+          unread: true
+        };
+
+        setNotificationList(prev => [newNotification, ...prev].slice(0, 20)); // Keep last 20
+        setNotifications(prev => prev + 1);
+
+        // Show browser notification if permission granted
+        if ('Notification' in window && Notification.permission === 'granted') {
+          new Notification(title, { body: text, icon: '/favicon.ico' });
+        }
+      } catch (err) {
+        console.error('Failed to process notification:', err);
+      }
+    };
+
+    ws.onerror = (error) => {
+      console.error('🔔 Notification WebSocket error:', error);
+    };
+
+    ws.onclose = () => {
+      console.log('🔔 Notification WebSocket disconnected');
+    };
+
+    wsRef.current = ws;
+
+    // Request notification permission
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+
+    return () => {
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.close();
+      }
+    };
   }, []);
 
   const handleLogout = () => {

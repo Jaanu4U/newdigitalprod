@@ -61,17 +61,36 @@ export default function PaymentsPage() {
     
     // Set up WebSocket for real-time updates
     const token = localStorage.getItem('dc_access');
-    const ws = new WebSocket(`wss://${window.location.host}/ws?token=${token}`);
+    if (!token) return;
+    
+    const ws = new WebSocket(`wss://api.digitalchain.in/ws?token=${token}`);
+    
+    ws.onopen = () => {
+      console.log('🔌 Payment WebSocket connected');
+    };
     
     ws.onmessage = (event) => {
       const data = JSON.parse(event.data);
+      console.log('📨 Payment WebSocket message:', data);
       if (data.type === 'payment_qr_generated' || data.type === 'payment_confirmed') {
         // Refresh payment list
         fetchPayments();
       }
     };
+    
+    ws.onerror = (error) => {
+      console.error('Payment WebSocket error:', error);
+    };
+    
+    ws.onclose = () => {
+      console.log('🔌 Payment WebSocket disconnected');
+    };
 
-    return () => ws.close();
+    return () => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.close();
+      }
+    };
   }, [filters]);
 
   const fetchPayments = async () => {
