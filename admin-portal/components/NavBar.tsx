@@ -27,6 +27,16 @@ export default function NavBar() {
       setEmail(localStorage.getItem("dc_email"));
       setRole(localStorage.getItem("dc_role"));
       setOrgName(localStorage.getItem("dc_org"));
+      
+      // Load notifications from localStorage
+      const savedNotifications = localStorage.getItem('dc_notifications');
+      if (savedNotifications) {
+        const parsed = JSON.parse(savedNotifications);
+        setNotificationList(parsed);
+        const unreadCount = parsed.filter((n: Notification) => n.unread).length;
+        setNotifications(unreadCount);
+        nextIdRef.current = Math.max(...parsed.map((n: Notification) => n.id), 0) + 1;
+      }
     } catch {}
 
     // Set up WebSocket for real-time notifications
@@ -85,8 +95,16 @@ export default function NavBar() {
           unread: true
         };
 
-        setNotificationList(prev => [newNotification, ...prev].slice(0, 20)); // Keep last 20
+        const updatedList = [newNotification, ...notificationList].slice(0, 20); // Keep last 20
+        setNotificationList(updatedList);
         setNotifications(prev => prev + 1);
+        
+        // Save to localStorage
+        try {
+          localStorage.setItem('dc_notifications', JSON.stringify(updatedList));
+        } catch (err) {
+          console.error('Failed to save notifications:', err);
+        }
 
         // Show browser notification if permission granted (only for important events)
         if ('Notification' in window && Notification.permission === 'granted') {
