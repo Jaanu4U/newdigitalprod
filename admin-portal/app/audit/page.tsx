@@ -854,7 +854,6 @@ export default function AuditPage() {
                     <tr>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Order Details</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Customer</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Amount</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
                     </tr>
@@ -872,6 +871,17 @@ export default function AuditPage() {
                           {order.rider_name && (
                             <div className="text-xs text-indigo-600">🏍️ Rider: {order.rider_name}</div>
                           )}
+                          {order.estimated_minutes && (
+                            <div className="text-xs text-gray-600">⏱️ Est: {order.estimated_minutes} min</div>
+                          )}
+                          {order.distance_km && (
+                            <div className="text-xs text-gray-600">📏 Distance: {order.distance_km} km</div>
+                          )}
+                          <div className="mt-1">
+                            <span className={`inline-block px-2 py-0.5 text-xs font-semibold rounded-full ${getStatusBadgeClass(order.status)}`}>
+                              {order.status.replace('_', ' ').toUpperCase()}
+                            </span>
+                          </div>
                           {order.tracking_number && (
                             <div className="text-xs text-blue-600">📦 {order.tracking_number}</div>
                           )}
@@ -890,15 +900,8 @@ export default function AuditPage() {
                         <div className="text-xs text-gray-500 mt-1">{order.delivery_address.slice(0, 40)}...</div>
                       </td>
                       
-                      {/* Status Column */}
-                      <td className="px-6 py-4">
-                        <span
-                          className={`px-2 py-1 text-xs font-semibold rounded-full ${getStatusBadgeClass(
-                            order.status
-                          )}`}
-                        >
-                          {order.status.replace('_', ' ').toUpperCase()}
-                        </span>
+                      {/* Status Column - Hidden (moved to Order Details) */}
+                      <td className="px-6 py-4 hidden">
                       </td>
                       
                       {/* Amount Column */}
