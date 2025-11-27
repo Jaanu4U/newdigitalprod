@@ -908,9 +908,6 @@ export default function AuditPage() {
                           {order.tracking_number && (
                             <div className="text-xs text-blue-600">📦 {order.tracking_number}</div>
                           )}
-                          {order.pod_image_url && (
-                            <div className="text-xs text-green-600 font-semibold">📸 POD</div>
-                          )}
                         </div>
                       </td>
                       
