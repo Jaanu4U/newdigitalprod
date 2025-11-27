@@ -88,7 +88,7 @@ export default function NavBar() {
         setNotificationList(prev => [newNotification, ...prev].slice(0, 20)); // Keep last 20
         setNotifications(prev => prev + 1);
 
-        // Show browser notification if permission granted
+        // Show browser notification if permission granted (only for important events)
         if ('Notification' in window && Notification.permission === 'granted') {
           new Notification(title, { body: text, icon: '/favicon.ico' });
         }
@@ -106,11 +106,6 @@ export default function NavBar() {
     };
 
     wsRef.current = ws;
-
-    // Request notification permission
-    if ('Notification' in window && Notification.permission === 'default') {
-      Notification.requestPermission();
-    }
 
     return () => {
       if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -140,6 +135,14 @@ export default function NavBar() {
   const markAllAsRead = () => {
     setNotificationList(prev => prev.map(notif => ({ ...notif, unread: false })));
     setNotifications(0);
+  };
+
+  const requestNotificationPermission = () => {
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission().then(permission => {
+        console.log('Notification permission:', permission);
+      });
+    }
   };
 
   return (
@@ -181,14 +184,25 @@ export default function NavBar() {
                 <div className="absolute right-0 mt-2 w-80 bg-white rounded-2xl shadow-2xl border border-gray-200 overflow-hidden z-50">
                   <div className="bg-gradient-to-r from-blue-600 to-indigo-600 px-4 py-3 flex items-center justify-between">
                     <h3 className="text-white font-semibold">Notifications</h3>
-                    {notifications > 0 && (
-                      <button
-                        onClick={markAllAsRead}
-                        className="text-xs text-white hover:underline"
-                      >
-                        Mark all read
-                      </button>
-                    )}
+                    <div className="flex gap-2">
+                      {Notification && Notification.permission === 'default' && (
+                        <button
+                          onClick={requestNotificationPermission}
+                          className="text-xs text-white hover:underline"
+                          title="Enable desktop notifications"
+                        >
+                          🔔 Enable
+                        </button>
+                      )}
+                      {notifications > 0 && (
+                        <button
+                          onClick={markAllAsRead}
+                          className="text-xs text-white hover:underline"
+                        >
+                          Mark all read
+                        </button>
+                      )}
+                    </div>
                   </div>
                   <div className="max-h-96 overflow-y-auto">
                     {notificationList.length === 0 ? (
