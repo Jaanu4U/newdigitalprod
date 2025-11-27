@@ -11,7 +11,7 @@ interface Notification {
   time: string;
   timestamp: Date;
   unread: boolean;
-  type: string;
+  type?: string;
 }
 
 export default function NotificationsPage() {
@@ -321,8 +321,8 @@ export default function NotificationsPage() {
               <div className="flex items-start justify-between">
                 <div className="flex-1">
                   <div className="flex items-center gap-2 mb-1">
-                    <span className={`text-xs px-2 py-1 rounded-full font-medium ${getTypeColor(notif.type)}`}>
-                      {notif.type.replace('_', ' ')}
+                    <span className={`text-xs px-2 py-1 rounded-full font-medium ${getTypeColor(notif.type || 'info')}`}>
+                      {(notif.type || 'info').replace(/_/g, ' ')}
                     </span>
                     {notif.unread && (
                       <span className="h-2 w-2 bg-blue-600 rounded-full"></span>

@@ -9,6 +9,7 @@ interface Notification {
   message: string;
   time: string;
   unread: boolean;
+  type?: string;
 }
 
 export default function NavBar() {
@@ -92,7 +93,8 @@ export default function NavBar() {
           title,
           message: text,
           time: 'Just now',
-          unread: true
+          unread: true,
+          type: message.type || 'info'
         };
 
         const updatedList = [newNotification, ...notificationList].slice(0, 20); // Keep last 20
