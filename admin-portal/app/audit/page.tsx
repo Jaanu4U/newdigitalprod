@@ -900,10 +900,6 @@ export default function AuditPage() {
                         <div className="text-xs text-gray-500 mt-1">{order.delivery_address.slice(0, 40)}...</div>
                       </td>
                       
-                      {/* Status Column - Hidden (moved to Order Details) */}
-                      <td className="px-6 py-4 hidden">
-                      </td>
-                      
                       {/* Amount Column */}
                       <td className="px-6 py-4">
                         <div className="text-sm font-semibold text-gray-900">{formatCurrency(order.amount)}</div>
