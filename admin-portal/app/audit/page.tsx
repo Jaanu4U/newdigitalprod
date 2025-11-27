@@ -117,6 +117,97 @@ export default function AuditPage() {
       }
     }
     
+    // Handle order status updates
+    if (message.type === 'order_status_update') {
+      const data = message.data;
+      console.log('📦 Order status update received:', data);
+      
+      setNotification(`Order ${data.invoice_no} is now ${data.status}`);
+      setTimeout(() => setNotification(''), 5000);
+      
+      // Update order status in state
+      setOrders(prev => prev.map(order => {
+        if (order.invoice_id === data.invoice_id) {
+          const updated = { ...order, status: data.status };
+          
+          // Update status-specific timestamps
+          const now = new Date().toISOString();
+          if (data.status === 'accepted') {
+            updated.accepted_at = now;
+          } else if (data.status === 'in_transit') {
+            updated.in_transit_at = now;
+          } else if (data.status === 'delivered' || data.status === 'completed') {
+            updated.delivered_at = now;
+            updated.completed_at = now;
+          }
+          
+          return updated;
+        }
+        return order;
+      }));
+      
+      // Update selected order if it's the one that got updated
+      if (selectedOrder?.invoice_id === data.invoice_id) {
+        setSelectedOrder(prev => {
+          if (!prev) return null;
+          const updated = { ...prev, status: data.status };
+          
+          const now = new Date().toISOString();
+          if (data.status === 'accepted') {
+            updated.accepted_at = now;
+          } else if (data.status === 'in_transit') {
+            updated.in_transit_at = now;
+          } else if (data.status === 'delivered' || data.status === 'completed') {
+            updated.delivered_at = now;
+            updated.completed_at = now;
+          }
+          
+          return updated;
+        });
+        
+        // Reload timeline to show the new status
+        if (data.invoice_id) {
+          fetchOrderTimeline(data.invoice_id);
+        }
+      }
+    }
+    
+    // Handle delivery completed
+    if (message.type === 'delivery_completed') {
+      const data = message.data;
+      console.log('✅ Delivery completed:', data);
+      
+      setNotification(`Order ${data.invoice_no} delivered successfully!`);
+      setTimeout(() => setNotification(''), 5000);
+      
+      // Update order status to completed
+      setOrders(prev => prev.map(order => 
+        order.invoice_id === data.invoice_id 
+          ? { 
+              ...order, 
+              status: 'completed',
+              delivered_at: new Date().toISOString(),
+              completed_at: new Date().toISOString()
+            }
+          : order
+      ));
+      
+      // Update selected order
+      if (selectedOrder?.invoice_id === data.invoice_id) {
+        setSelectedOrder(prev => prev ? { 
+          ...prev, 
+          status: 'completed',
+          delivered_at: new Date().toISOString(),
+          completed_at: new Date().toISOString()
+        } : null);
+        
+        // Reload timeline
+        if (data.invoice_id) {
+          fetchOrderTimeline(data.invoice_id);
+        }
+      }
+    }
+    
     // Handle rider location updates
     if (message.type === 'rider_location_update') {
       const data = message.data;
