@@ -1,11 +1,11 @@
-package in.digitalchain.rider.ui.screens
+package com.digitalchain.rider.ui.screens
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import in.digitalchain.rider.data.Repository
+import com.digitalchain.rider.data.Repository
 import kotlinx.coroutines.launch
 
 @Composable

@@ -12,19 +12,28 @@ export default function ClientLayout({
   children: React.ReactNode
 }) {
   const pathname = usePathname()
+  const [mounted, setMounted] = useState(true)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(true)
   const isLoginPage = pathname === '/login' || pathname === '/superadmin/login'
   const isSignupPage = pathname === '/signup'
-  const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
-  const [isApexRoot, setIsApexRoot] = useState(false)
+  const isVerifyEmailPage = pathname === '/verify-email'
+  const isVerifyPendingPage = pathname === '/verify-pending'
+  const isSuperAdminPage = pathname?.startsWith('/superadmin')
+  const [isApexRoot, setIsApexRoot] = useState(true)
 
-  // Load persisted collapse state (desktop)
+  // Mount effect
   useEffect(() => {
+    setMounted(true)
+  }, [])
+
+  // Load persisted collapse state
+  useEffect(() => {
+    if (!mounted) return
     try {
       const saved = localStorage.getItem('dc_sidebar_collapsed')
       if (saved) setSidebarCollapsed(saved === '1')
     } catch {}
-  }, [])
+  }, [mounted])
 
   // Persist collapse state
   useEffect(() => {
@@ -33,12 +42,8 @@ export default function ClientLayout({
     } catch {}
   }, [sidebarCollapsed])
 
-  // Close sidebar on route changes (mobile UX)
   useEffect(() => {
-    setSidebarOpen(false)
-  }, [pathname])
-
-  useEffect(() => {
+    if (!mounted) return
     try {
       const host = window.location.hostname
       const slug = getTenantSlugFromHost(host)
@@ -46,19 +51,29 @@ export default function ClientLayout({
       // Only treat apex homepage as marketing (full-bleed)
       setIsApexRoot(Boolean(!slug && isApex && pathname === '/'))
     } catch {}
-  }, [pathname])
+  }, [pathname, mounted])
 
-  if (isLoginPage || isSignupPage || isApexRoot) {
-    // Clean login page - no navbar or sidebar
+  // Don't render layout features until mounted to avoid hydration mismatch
+  if (!mounted) {
+    return <div className="min-h-screen">{children}</div>
+  }
+
+  if (isLoginPage || isSignupPage || isVerifyEmailPage || isVerifyPendingPage || isApexRoot || isSuperAdminPage) {
+    // Clean pages - no navbar or sidebar
     return children
   }
 
   return (
-    <div className="flex flex-col">
-      <NavBar onToggleSidebar={() => setSidebarOpen((v) => !v)} sidebarOpen={sidebarOpen} />
-      <div className={`flex gap-6 flex-1 relative ${sidebarCollapsed ? 'md:pl-0' : ''}`}>
-        <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} collapsed={sidebarCollapsed} onToggleCollapsed={() => setSidebarCollapsed((v) => !v)} />
-        <main className="flex-1 px-4 py-6">
+    <div className="flex flex-col min-h-screen">
+      <NavBar />
+      <div className="flex flex-1">
+        <Sidebar collapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed(!sidebarCollapsed)} />
+        <main 
+          className={`
+            flex-1 p-6 bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 min-h-screen transition-all duration-300
+            ${sidebarCollapsed ? 'ml-20' : 'ml-64'}
+          `}
+        >
           {children}
         </main>
       </div>

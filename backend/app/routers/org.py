@@ -1,5 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from sqlalchemy import func
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 from ..db import get_db, Base, engine
 from .. import models, schemas
 from ..security import hash_password
@@ -7,6 +9,8 @@ import secrets
 import re
 from ..deps import get_current_principal, CurrentPrincipal
 from ..tenancy import resolve_tenant
+from datetime import datetime, timedelta
+from ..utils.email import send_verification_email, send_welcome_email
 
 router = APIRouter()
 
@@ -26,6 +30,23 @@ def _slugify(name: str) -> str:
 
 @router.post("/register", response_model=schemas.OrgRegisterOut)
 def register_org(payload: schemas.OrgRegisterIn, db: Session = Depends(get_db)):
+    # Validate admin email uniqueness
+    email_lower = payload.admin_email.lower().strip()
+    existing_email = db.query(models.User).filter(models.User.email == email_lower).first()
+    if existing_email:
+        raise HTTPException(status_code=409, detail="Email address already registered")
+    
+    # Validate phone number format if provided
+    if payload.admin_phone:
+        phone = payload.admin_phone.strip()
+        # Must start with + and have country code
+        if not phone.startswith('+'):
+            raise HTTPException(status_code=400, detail="Phone number must include country code (e.g., +91)")
+        # Remove + and check if rest is digits
+        phone_digits = phone[1:]
+        if not phone_digits.isdigit() or len(phone_digits) < 10 or len(phone_digits) > 15:
+            raise HTTPException(status_code=400, detail="Invalid phone number format")
+    
     # Create org with access key
     access_key = secrets.token_urlsafe(24)
     # Determine slug (unique)
@@ -50,23 +71,48 @@ def register_org(payload: schemas.OrgRegisterIn, db: Session = Depends(get_db)):
         region=payload.region,
         plan=payload.plan,
         access_key=access_key,
+        address=payload.address,
+        city=payload.city,
+        state=payload.state,
+        pincode=payload.pincode,
+        country=payload.country,
     )
     db.add(org)
     db.flush()
 
-    # Create owner user with temp password 'ChangeMe123!'
+    # Create owner user with validated email and phone
     owner_password = payload.admin_password or "ChangeMe123!"
+    
+    # Generate email verification token
+    verification_token = secrets.token_urlsafe(32)
+    token_expires_at = datetime.utcnow() + timedelta(hours=24)
+    
     user = models.User(
         org_id=org.org_id,
-        email=payload.admin_email,
+        email=email_lower,
         name=payload.admin_name,
         role="Owner",
         cellnumber=payload.admin_phone,
-        password_hash=hash_password(owner_password)
+        password_hash=hash_password(owner_password),
+        email_verified=False,
+        verification_token=verification_token,
+        token_expires_at=token_expires_at
     )
     db.add(user)
     db.commit()
     db.refresh(org)
+    
+    # Send verification email
+    try:
+        verification_link = f"https://admin.digitalchain.in/verify-email?token={verification_token}"
+        print(f"[Registration] Attempting to send verification email to {email_lower}")
+        result = send_verification_email(db, email_lower, verification_link, payload.org_name)
+        print(f"[Registration] Email send result: {result}")
+    except Exception as e:
+        print(f"[Registration] Failed to send verification email: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        # Don't fail registration if email fails - user can request resend
 
     return schemas.OrgRegisterOut(org_id=org.org_id, access_key=org.access_key, slug=org.slug)
 
@@ -96,6 +142,170 @@ def check_availability(slug: str | None = Query(default=None), domain: str | Non
     return out
 
 
+@router.get("/lookup", response_model=schemas.OrgLookupOut)
+def lookup_org(
+    slug: str | None = Query(default=None, description="Organization slug (e.g. acme)"),
+    domain: str | None = Query(default=None, description="Custom domain (e.g. acme.com)"),
+    access_key: str | None = Query(default=None, description="Access key value"),
+    db: Session = Depends(get_db)
+):
+    slug_val = (slug or "").strip().lower() or None
+    domain_val = (domain or "").strip().lower() or None
+    access_val = (access_key or "").strip() or None
+
+    if not any([slug_val, domain_val, access_val]):
+        raise HTTPException(status_code=400, detail="Provide slug, domain, or access_key")
+
+    query = db.query(models.Organization).filter(models.Organization.status == "active")
+    if slug_val:
+        query = query.filter(models.Organization.slug == slug_val)
+    elif domain_val:
+        query = query.filter(models.Organization.custom_domain == domain_val)
+    else:
+        query = query.filter(models.Organization.access_key == access_val)
+
+    org = query.first()
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+
+    return schemas.OrgLookupOut(
+        org_id=org.org_id,
+        name=org.name,
+        slug=org.slug,
+        custom_domain=org.custom_domain,
+        status=org.status
+    )
+
+
+@router.get("/lookup-by-email", response_model=schemas.OrgLookupOut)
+def lookup_org_by_email(
+    email: str = Query(..., description="User email address"),
+    db: Session = Depends(get_db)
+):
+    email_lower = (email or "").strip().lower()
+    if not email_lower:
+        raise HTTPException(status_code=400, detail="Email is required")
+
+    user = db.query(models.User).filter(func.lower(models.User.email) == email_lower).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    org = (
+        db.query(models.Organization)
+        .filter(models.Organization.org_id == user.org_id, models.Organization.status == "active")
+        .first()
+    )
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found or inactive")
+
+    return schemas.OrgLookupOut(
+        org_id=org.org_id,
+        name=org.name,
+        slug=org.slug,
+        custom_domain=org.custom_domain,
+        status=org.status
+    )
+
+
+@router.get("/check-email")
+def check_email_availability(email: str = Query(...), db: Session = Depends(get_db)):
+    """Check if email is already registered as an admin/owner"""
+    email_lower = email.lower().strip()
+    
+    # Check if email exists in users table
+    existing_user = db.query(models.User).filter(models.User.email == email_lower).first()
+    
+    if existing_user:
+        return {"available": False, "reason": "Email already registered"}
+    
+    return {"available": True}
+
+
+@router.get("/verify-email")
+def verify_email(token: str = Query(...), db: Session = Depends(get_db)):
+    """Verify user email using verification token"""
+    if not token:
+        raise HTTPException(status_code=400, detail="Verification token is required")
+    
+    # Find user with this token
+    user = db.query(models.User).filter(models.User.verification_token == token).first()
+    
+    if not user:
+        raise HTTPException(status_code=404, detail="Invalid verification token")
+    
+    # Check if token has expired
+    if user.token_expires_at and user.token_expires_at < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="Verification token has expired")
+    
+    # Check if already verified
+    if user.email_verified:
+        return {"status": "success", "message": "Email already verified"}
+    
+    # Get organization details for welcome email
+    org = db.query(models.Organization).filter(models.Organization.org_id == user.org_id).first()
+    
+    # Verify the email
+    user.email_verified = True
+    user.verification_token = None
+    user.token_expires_at = None
+    db.commit()
+    
+    # Send welcome email with setup instructions
+    if org:
+        try:
+            send_welcome_email(db, user.email, org.name, org.slug, user.name or "")
+        except Exception as e:
+            print(f"[Verification] Failed to send welcome email: {str(e)}")
+            # Don't fail verification if welcome email fails
+    
+    return {
+        "status": "success", 
+        "message": "Email verified successfully",
+        "org_slug": org.slug if org else None
+    }
+
+
+@router.post("/resend-verification")
+def resend_verification_email(email: str, db: Session = Depends(get_db)):
+    """Resend verification email for unverified users"""
+    email_lower = email.lower().strip()
+    
+    # Find user by email
+    user = db.query(models.User).filter(models.User.email == email_lower).first()
+    
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Check if already verified
+    if user.email_verified:
+        return {"status": "success", "message": "Email already verified"}
+    
+    # Get organization details
+    org = db.query(models.Organization).filter(models.Organization.org_id == user.org_id).first()
+    
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    
+    # Generate new verification token
+    verification_token = secrets.token_urlsafe(32)
+    token_expires_at = datetime.utcnow() + timedelta(hours=24)
+    
+    # Update user with new token
+    user.verification_token = verification_token
+    user.token_expires_at = token_expires_at
+    db.commit()
+    
+    # Send verification email
+    try:
+        verification_link = f"https://admin.digitalchain.in/verify-email?token={verification_token}"
+        send_verification_email(db, email_lower, verification_link, org.name)
+    except Exception as e:
+        print(f"[Resend] Failed to send verification email: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to send verification email")
+    
+    return {"status": "success", "message": "Verification email sent"}
+
+
 @router.get("/settings", response_model=schemas.OrgSettingsOut)
 def get_org_settings(request: Request, principal: CurrentPrincipal = Depends(get_current_principal), db: Session = Depends(get_db)):
     # Resolve current org either by principal.org_id or host
@@ -111,6 +321,9 @@ def get_org_settings(request: Request, principal: CurrentPrincipal = Depends(get
     payment = s.get("payment") or s.get("payment_settings")
     email = s.get("email") or s.get("email_settings")
     maps = s.get("maps") or s.get("maps_settings")
+    business = s.get("business") or s.get("business_settings")
+    providers = s.get("providers") or s.get("provider_settings")
+    whatsapp = s.get("whatsapp") or s.get("whatsapp_settings")
 
     # Mask secrets in response and add *_present flags
     def mask_section(sec: dict | None, secret_keys: list[str]):
@@ -139,10 +352,167 @@ def get_org_settings(request: Request, principal: CurrentPrincipal = Depends(get
         status=org.status,
         created_at=org.created_at,
         updated_at=org.updated_at,
+        address=org.address,
+        city=org.city,
+        state=org.state,
+        pincode=org.pincode,
+        country=org.country,
         payment_settings=payment,
         email_settings=email,
         maps_settings=maps,
+        business_settings=business,
+        provider_settings=providers,
+        whatsapp_settings=whatsapp,
     )
+
+
+@router.get("/maps-api-key")
+def get_maps_api_key(request: Request, principal: CurrentPrincipal = Depends(get_current_principal), db: Session = Depends(get_db)):
+    """Get the unmasked Google Maps API key for frontend use (requires authentication)"""
+    # Resolve current org
+    org = None
+    if principal.org_id:
+        org = db.query(models.Organization).filter(models.Organization.org_id == principal.org_id).first()
+    if org is None:
+        org = resolve_tenant(request, db)
+    if org is None:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    
+    # Get maps settings
+    s = org.settings or {}
+    maps = s.get("maps") or s.get("maps_settings") or {}
+    
+    # Return the unmasked API key
+    return {
+        "google_api_key": maps.get("google_api_key"),
+        "enabled": maps.get("enabled", False),
+        "provider": maps.get("provider", "google")
+    }
+
+
+@router.get("/geocode")
+def geocode_address(address: str = Query(..., description="Address to geocode"), request: Request = None, principal: CurrentPrincipal = Depends(get_current_principal), db: Session = Depends(get_db)):
+    """Geocode an address to lat/lng coordinates using Google Maps API"""
+    import urllib.parse
+    import urllib.request
+    import json
+    
+    # Resolve current org
+    org = None
+    print(f"[Geocode] principal.org_id = {principal.org_id}")
+    if principal.org_id:
+        org = db.query(models.Organization).filter(models.Organization.org_id == principal.org_id).first()
+        print(f"[Geocode] Found org by principal: {org.name if org else 'None'}")
+    if org is None and request:
+        print(f"[Geocode] Trying to resolve tenant from request")
+        org = resolve_tenant(request, db)
+        print(f"[Geocode] Resolved org: {org.name if org else 'None'}")
+    if org is None:
+        print(f"[Geocode] ERROR: Organization not found! principal.org_id={principal.org_id}")
+        raise HTTPException(status_code=404, detail="Organization not found")
+    
+    # Get maps settings
+    s = org.settings or {}
+    maps = s.get("maps") or s.get("maps_settings") or {}
+    api_key = maps.get("google_api_key")
+    
+    if not api_key:
+        raise HTTPException(status_code=400, detail="Google Maps API key not configured")
+    
+    # Geocode the address
+    try:
+        encoded_address = urllib.parse.quote(address)
+        url = f"https://maps.googleapis.com/maps/api/geocode/json?address={encoded_address}&key={api_key}"
+        
+        with urllib.request.urlopen(url) as response:
+            data = json.loads(response.read().decode())
+            
+        if data.get("status") == "OK" and len(data.get("results", [])) > 0:
+            location = data["results"][0]["geometry"]["location"]
+            return {
+                "status": "ok",
+                "latitude": location["lat"],
+                "longitude": location["lng"],
+                "formatted_address": data["results"][0].get("formatted_address")
+            }
+        else:
+            return {
+                "status": "error",
+                "message": data.get("error_message") or f"Geocoding failed: {data.get('status')}"
+            }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Geocoding error: {str(e)}")
+
+
+@router.get("/estimated-time")
+def get_estimated_delivery_time(
+    origin_lat: float = Query(..., description="Origin latitude"),
+    origin_lng: float = Query(..., description="Origin longitude"),
+    dest_lat: float = Query(..., description="Destination latitude"),
+    dest_lng: float = Query(..., description="Destination longitude"),
+    request: Request = None,
+    principal: CurrentPrincipal = Depends(get_current_principal),
+    db: Session = Depends(get_db)
+):
+    """Calculate estimated delivery time using Google Maps Distance Matrix API"""
+    import urllib.parse
+    import urllib.request
+    import json
+    
+    # Resolve current org
+    org = None
+    if principal.org_id:
+        org = db.query(models.Organization).filter(models.Organization.org_id == principal.org_id).first()
+    if org is None and request:
+        org = resolve_tenant(request, db)
+    if org is None:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    
+    # Get maps settings
+    s = org.settings or {}
+    maps = s.get("maps") or s.get("maps_settings") or {}
+    api_key = maps.get("google_api_key")
+    
+    if not api_key:
+        raise HTTPException(status_code=400, detail="Google Maps API key not configured")
+    
+    # Call Distance Matrix API
+    try:
+        origins = f"{origin_lat},{origin_lng}"
+        destinations = f"{dest_lat},{dest_lng}"
+        url = f"https://maps.googleapis.com/maps/api/distancematrix/json?origins={origins}&destinations={destinations}&mode=driving&key={api_key}"
+        
+        with urllib.request.urlopen(url) as response:
+            data = json.loads(response.read().decode())
+        
+        if data.get("status") == "OK":
+            rows = data.get("rows", [])
+            if rows and len(rows) > 0:
+                elements = rows[0].get("elements", [])
+                if elements and len(elements) > 0:
+                    element = elements[0]
+                    if element.get("status") == "OK":
+                        duration = element.get("duration", {})
+                        distance = element.get("distance", {})
+                        
+                        # Duration is in seconds, convert to minutes
+                        duration_minutes = duration.get("value", 0) // 60
+                        distance_km = distance.get("value", 0) / 1000
+                        
+                        return {
+                            "status": "ok",
+                            "duration_minutes": duration_minutes,
+                            "duration_text": duration.get("text", ""),
+                            "distance_km": round(distance_km, 2),
+                            "distance_text": distance.get("text", "")
+                        }
+        
+        return {
+            "status": "error",
+            "message": data.get("error_message") or f"Distance calculation failed: {data.get('status')}"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Distance calculation error: {str(e)}")
 
 
 @router.put("/settings", response_model=dict)
@@ -174,6 +544,18 @@ def update_org_settings(
         org.timezone = payload.timezone
     if payload.plan is not None:
         org.plan = payload.plan
+    
+    # Update address fields
+    if payload.address is not None:
+        org.address = payload.address
+    if payload.city is not None:
+        org.city = payload.city
+    if payload.state is not None:
+        org.state = payload.state
+    if payload.pincode is not None:
+        org.pincode = payload.pincode
+    if payload.country is not None:
+        org.country = payload.country
 
     # Merge section-wise settings into org.settings JSON
     s = org.settings or {}
@@ -182,6 +564,9 @@ def update_org_settings(
     incoming_payment = getattr(payload, "payment_settings", None)
     incoming_email = getattr(payload, "email_settings", None)
     incoming_maps = getattr(payload, "maps_settings", None)
+    incoming_business = getattr(payload, "business_settings", None)
+    incoming_providers = getattr(payload, "provider_settings", None)
+    incoming_whatsapp = getattr(payload, "whatsapp_settings", None)
 
     def to_int(val, default=None):
         try:
@@ -269,14 +654,22 @@ def update_org_settings(
             if k in s:
                 s.pop(k, None)
         s[key_aliases[0]] = merged
+        print(f"[DEBUG] merge_section: key={key_aliases[0]}, incoming={incoming}, existing={existing}, merged={merged}")
 
     # Apply merges after validation passes
     merge_section(["payment" , "payment_settings"], incoming_payment)
     merge_section(["email"   , "email_settings"  ], incoming_email)
     merge_section(["maps"    , "maps_settings"   ], incoming_maps)
+    merge_section(["business", "business_settings"], incoming_business)
+    merge_section(["providers", "provider_settings"], incoming_providers)
+    merge_section(["whatsapp", "whatsapp_settings"], incoming_whatsapp)
 
+    print(f"[DEBUG] Before commit - org.settings = {s}")
     org.settings = s
+    flag_modified(org, "settings")  # Tell SQLAlchemy the JSON field changed
+    print(f"[DEBUG] After assignment - org.settings = {org.settings}")
 
     db.commit()
     db.refresh(org)
+    print(f"[DEBUG] After commit - org.settings = {org.settings}")
     return {"status": "ok"}

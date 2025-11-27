@@ -2,8 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { BarChart3, Users, Mail } from "lucide-react";
+import { BarChart3, Users } from "lucide-react";
 import { getTenantSlugFromHost } from "@/lib/tenant";
+import SuperAdminHeader from "@/components/SuperAdminHeader";
 
 interface DashboardData {
   summary: {
@@ -54,7 +55,7 @@ export default function SuperAdminDashboard() {
     const userEmail = localStorage.getItem("dc_email");
 
     if (!token || role !== "SuperAdmin") {
-      router.push("/login");
+      router.push("/superadmin/login");
       return;
     }
 
@@ -64,12 +65,12 @@ export default function SuperAdminDashboard() {
     const fetchDashboard = async () => {
       try {
         const { apiBase } = await import("@/lib/api");
-        const res = await fetch(`${apiBase()}superadmin/dashboard`, {
+        const res = await fetch(`${apiBase()}v1/superadmin/dashboard`, {
           headers: { Authorization: `Bearer ${token}` },
         });
 
         if (!res.ok) {
-          if (res.status === 401) router.push("/login");
+          if (res.status === 401) router.push("/superadmin/login");
           throw new Error("Failed to fetch dashboard");
         }
 
@@ -116,14 +117,10 @@ export default function SuperAdminDashboard() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Header */}
+      <SuperAdminHeader email={email} activeTab="dashboard" />
+
+      {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-900">SuperAdmin Dashboard</h1>
-          <p className="text-gray-600 mt-1 flex items-center gap-2">
-            <Mail size={16} /> {email}
-          </p>
-        </div>
 
         {/* Summary Stats - Only Organizations and Users */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">

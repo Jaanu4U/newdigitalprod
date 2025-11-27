@@ -1,0 +1,907 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import { apiBase } from "@/lib/api";
+import { getTenantSlugFromHost, withTenantHeaders } from "@/lib/tenant";
+import { User, KeyRound, Loader2, Building, Save, AlertCircle, Crosshair } from "lucide-react";
+import { REGIONS, TIMEZONES, detectBrowserTimeZone } from "@/lib/constants";
+
+interface Me {
+  user_id: string;
+  email: string;
+  name: string | null;
+  cellnumber: string | null;
+  role: string;
+  team: string | null;
+  status: string;
+  created_at: string | null;
+}
+
+interface OrgSettings {
+  org_id: string;
+  name: string;
+  slug: string | null;
+  custom_domain: string | null;
+  region: string | null;
+  timezone: string | null;
+  plan: string | null;
+  status: string;
+  created_at: string | null;
+  updated_at: string | null;
+  payment_settings?: any;
+  email_settings?: any;
+  maps_settings?: any;
+  business_settings?: any;
+}
+
+type PaymentSettings = {
+  enabled?: boolean;
+  provider?: string;
+  currency?: string;
+  public_key?: string;
+  secret_key?: string;
+};
+
+type EmailSettings = {
+  enabled?: boolean;
+  provider?: string;
+  smtp_host?: string;
+  smtp_port?: number | string;
+  smtp_user?: string;
+  smtp_password?: string;
+  from_email?: string;
+};
+
+type MapsSettings = {
+  enabled?: boolean;
+  provider?: string;
+  google_api_key?: string;
+};
+
+export default function SettingsPage() {
+  const router = useRouter();
+  const [me, setMe] = useState<Me | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [pwSaving, setPwSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+  const [token, setToken] = useState<string>("");
+  const [slug, setSlug] = useState<string | null>(null);
+  const [role, setRole] = useState<string | null>(null);
+
+  // User profile states
+  const [name, setName] = useState("");
+  const [cell, setCell] = useState("");
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+
+  // Organization settings states
+  const [orgSettings, setOrgSettings] = useState<OrgSettings | null>(null);
+  const [orgName, setOrgName] = useState("");
+  const [region, setRegion] = useState("");
+  const [timezone, setTimezone] = useState("");
+  const [plan, setPlan] = useState("");
+  const [savingOrg, setSavingOrg] = useState(false);
+  const [savingPayment, setSavingPayment] = useState(false);
+  const [savingEmail, setSavingEmail] = useState(false);
+  const [savingMaps, setSavingMaps] = useState(false);
+
+  const [pay, setPay] = useState<PaymentSettings>({ enabled: false, provider: "", currency: "", public_key: "", secret_key: "" });
+  const [email, setEmail] = useState<EmailSettings>({ enabled: false, provider: "SMTP", smtp_port: 587 });
+  const [maps, setMaps] = useState<MapsSettings>({ enabled: false, provider: "google", google_api_key: "" });
+
+  const base = useMemo(() => apiBase(), []);
+
+  const isPrivileged = (r: string | null) => {
+    const rl = (r || "").toLowerCase();
+    return rl === "admin" || rl === "owner" || rl === "superadmin";
+  };
+
+  useEffect(() => {
+    const tenantSlug = getTenantSlugFromHost();
+    setSlug(tenantSlug);
+    
+    const t = localStorage.getItem("dc_access") || "";
+    const r = localStorage.getItem("dc_role");
+    setRole(r);
+    
+    if (!t) {
+      router.push("/login");
+      return;
+    }
+    
+    setToken(t);
+    fetchMe(t);
+    
+    // Fetch org settings only if user is in a tenant organization
+    if (tenantSlug) {
+      fetchOrgSettings(t);
+    }
+  }, [router]);
+
+  const fetchMe = async (accessToken: string) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`${base}me`, withTenantHeaders({
+        headers: { Authorization: `Bearer ${accessToken}` },
+      }));
+      if (res.status === 401) {
+        router.push("/login");
+        return;
+      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setMe(data);
+      setName(data.name || "");
+      setCell(data.cellnumber || "");
+    } catch (e: any) {
+      setError(e.message || "Failed to load settings");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchOrgSettings = async (accessToken: string) => {
+    setError(null);
+    try {
+      const res = await fetch(`${base}org/settings`, withTenantHeaders({
+        cache: "no-store",
+        headers: { Authorization: `Bearer ${accessToken}` },
+      }));
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data: OrgSettings = await res.json();
+      setOrgSettings(data);
+      setOrgName(data.name || "");
+      setRegion(data.region || "");
+      setTimezone(data.timezone || "");
+      setPlan(data.plan || "");
+      setPay({
+        enabled: Boolean(data.payment_settings?.enabled) || false,
+        provider: data.payment_settings?.provider || "",
+        currency: data.payment_settings?.currency || "",
+        public_key: data.payment_settings?.public_key || "",
+        secret_key: data.payment_settings?.secret_key || "",
+      });
+      setEmail({
+        enabled: Boolean(data.email_settings?.enabled) || false,
+        provider: data.email_settings?.provider || "SMTP",
+        smtp_host: data.email_settings?.smtp_host || "",
+        smtp_port: data.email_settings?.smtp_port ?? 587,
+        smtp_user: data.email_settings?.smtp_user || "",
+        smtp_password: data.email_settings?.smtp_password || "",
+        from_email: data.email_settings?.from_email || "",
+      });
+      setMaps({
+        enabled: Boolean(data.maps_settings?.enabled) || false,
+        provider: data.maps_settings?.provider || "google",
+        google_api_key: data.maps_settings?.google_api_key || "",
+      });
+    } catch (e: any) {
+      // Silently fail if org settings not available
+    }
+  };
+
+  const saveProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      const res = await fetch(`${base}me`, withTenantHeaders({
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ name, cellnumber: cell }),
+      }));
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.detail || `HTTP ${res.status}`);
+      }
+      await fetchMe(token);
+      setSuccess("Profile updated successfully");
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (e: any) {
+      setError(e.message || "Failed to save profile");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const changePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (newPassword !== confirmPassword) {
+      setError("Passwords do not match");
+      return;
+    }
+    setPwSaving(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      const res = await fetch(`${base}me/password`, withTenantHeaders({
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+      }));
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.detail || `HTTP ${res.status}`);
+      }
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      setSuccess("Password changed successfully");
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (e: any) {
+      setError(e.message || "Failed to change password");
+    } finally {
+      setPwSaving(false);
+    }
+  };
+
+  const putOrgSettings = async (body: any) => {
+    const res = await fetch(`${base}org/settings`, withTenantHeaders({
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(body),
+    }));
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      throw new Error(d.detail || `HTTP ${res.status}`);
+    }
+    return res.json().catch(() => ({}));
+  };
+
+  const handleSaveOrg = async () => {
+    setError(null);
+    setSuccess(null);
+    setSavingOrg(true);
+    try {
+      await putOrgSettings({ name: orgName, region, timezone, plan });
+      await fetchOrgSettings(token);
+      setSuccess("Organization settings updated");
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (e: any) {
+      setError(e.message || "Failed to save organization settings");
+    } finally {
+      setSavingOrg(false);
+    }
+  };
+
+  const handleSavePayment = async () => {
+    setError(null);
+    setSuccess(null);
+    setSavingPayment(true);
+    try {
+      await putOrgSettings({ payment_settings: pay });
+      await fetchOrgSettings(token);
+      setSuccess("Payment settings updated");
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (e: any) {
+      setError(e.message || "Failed to save payment settings");
+    } finally {
+      setSavingPayment(false);
+    }
+  };
+
+  const handleSaveEmail = async () => {
+    setError(null);
+    setSuccess(null);
+    setSavingEmail(true);
+    try {
+      await putOrgSettings({ email_settings: email });
+      await fetchOrgSettings(token);
+      setSuccess("Email settings updated");
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (e: any) {
+      setError(e.message || "Failed to save email settings");
+    } finally {
+      setSavingEmail(false);
+    }
+  };
+
+  const handleSaveMaps = async () => {
+    setError(null);
+    setSuccess(null);
+    setSavingMaps(true);
+    try {
+      await putOrgSettings({ maps_settings: maps });
+      await fetchOrgSettings(token);
+      setSuccess("Maps settings updated");
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (e: any) {
+      setError(e.message || "Failed to save maps settings");
+    } finally {
+      setSavingMaps(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="flex items-center gap-2 text-gray-600">
+          <Loader2 className="animate-spin" size={20} /> Loading settings...
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50 py-8">
+      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+        <h1 className="text-3xl font-bold text-gray-900 mb-6">Settings</h1>
+
+        {error && (
+          <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 mb-4 flex items-center gap-2">
+            <AlertCircle size={16} /> {error}
+          </div>
+        )}
+
+        {success && (
+          <div className="rounded-md border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700 mb-4">
+            {success}
+          </div>
+        )}
+
+        {/* User Profile Section */}
+        <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-6 mb-6">
+          <div className="flex items-center gap-3 mb-6">
+            <div className="h-10 w-10 rounded-full bg-brand-600 flex items-center justify-center">
+              <User size={20} className="text-white" />
+            </div>
+            <div>
+              <h2 className="text-lg font-semibold text-gray-900">User Profile</h2>
+              <p className="text-sm text-gray-500">Manage your personal information</p>
+            </div>
+          </div>
+          
+          <form onSubmit={saveProfile} className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
+                <input
+                  type="text"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-500"
+                  placeholder="Your name"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Phone</label>
+                <input
+                  type="tel"
+                  value={cell}
+                  onChange={(e) => setCell(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-500"
+                  placeholder="+1 (555) 000-0000"
+                />
+              </div>
+            </div>
+            <div className="flex justify-end pt-4 border-t">
+              <button 
+                type="submit" 
+                disabled={saving} 
+                className="inline-flex items-center gap-2 px-6 py-2 rounded-md bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+              >
+                {saving ? (
+                  <>
+                    <Loader2 size={16} className="animate-spin" />
+                    Saving...
+                  </>
+                ) : (
+                  "Save Changes"
+                )}
+              </button>
+            </div>
+          </form>
+        </div>
+
+        {/* Change Password Section */}
+        <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-6 mb-6">
+          <div className="flex items-center gap-3 mb-6">
+            <div className="h-10 w-10 rounded-full bg-gray-700 flex items-center justify-center">
+              <KeyRound size={20} className="text-white" />
+            </div>
+            <div>
+              <h2 className="text-lg font-semibold text-gray-900">Change Password</h2>
+              <p className="text-sm text-gray-500">Update your password to keep your account secure</p>
+            </div>
+          </div>
+          
+          <form onSubmit={changePassword} className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Current Password</label>
+              <input
+                type="password"
+                value={currentPassword}
+                onChange={(e) => setCurrentPassword(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-500"
+                placeholder="Current password"
+                required
+              />
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">New Password</label>
+                <input
+                  type="password"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-500"
+                  placeholder="At least 8 characters"
+                  required
+                  minLength={8}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Confirm New Password</label>
+                <input
+                  type="password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-500"
+                  placeholder="Re-enter new password"
+                  required
+                  minLength={8}
+                />
+              </div>
+            </div>
+            <div className="flex justify-end pt-4 border-t">
+              <button 
+                type="submit" 
+                disabled={pwSaving} 
+                className="inline-flex items-center gap-2 px-6 py-2 rounded-md bg-gray-800 text-white hover:bg-black disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+              >
+                {pwSaving ? (
+                  <>
+                    <Loader2 size={16} className="animate-spin" />
+                    Updating...
+                  </>
+                ) : (
+                  "Update Password"
+                )}
+              </button>
+            </div>
+          </form>
+        </div>
+
+        {/* Organization Settings - Only show for tenant users with privileged role */}
+        {slug && isPrivileged(role) && orgSettings && (
+          <>
+            <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-6 mb-6">
+              <div className="flex items-center justify-between mb-6">
+                <div className="flex items-center gap-3">
+                  <div className="h-10 w-10 rounded-full bg-blue-600 flex items-center justify-center">
+                    <Building size={20} className="text-white" />
+                  </div>
+                  <div>
+                    <h2 className="text-lg font-semibold text-gray-900">Organization Settings</h2>
+                    <p className="text-sm text-gray-500">Manage your organization configuration</p>
+                  </div>
+                </div>
+                <button
+                  onClick={handleSaveOrg}
+                  disabled={savingOrg}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-50"
+                >
+                  <Save size={16} /> {savingOrg ? "Saving..." : "Save"}
+                </button>
+              </div>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Organization Name</label>
+                  <input
+                    type="text"
+                    value={orgName}
+                    onChange={(e) => setOrgName(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Subdomain</label>
+                  <input
+                    type="text"
+                    value={orgSettings?.slug || ""}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md bg-gray-100 text-gray-600"
+                    disabled
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Region</label>
+                  <select
+                    value={region}
+                    onChange={(e) => setRegion(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-500 bg-white"
+                  >
+                    <option value="">Select region...</option>
+                    {REGIONS.map((r) => (
+                      <option key={r.value} value={r.value}>{r.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <div className="flex items-center justify-between">
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Timezone</label>
+                    <button
+                      type="button"
+                      className="text-xs inline-flex items-center gap-1 text-brand-700 hover:text-brand-800"
+                      onClick={() => {
+                        const tz = detectBrowserTimeZone();
+                        if (tz) setTimezone(tz);
+                      }}
+                      title="Use my browser timezone"
+                    >
+                      <Crosshair size={12} /> Use my timezone
+                    </button>
+                  </div>
+                  <select
+                    value={timezone}
+                    onChange={(e) => setTimezone(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-500 bg-white"
+                  >
+                    <option value="">Select timezone...</option>
+                    {TIMEZONES.map((tz) => (
+                      <option key={tz.value} value={tz.value}>{tz.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Plan</label>
+                  <input
+                    type="text"
+                    value={plan}
+                    onChange={(e) => setPlan(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
+                  <input
+                    type="text"
+                    value={orgSettings?.status || ""}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md bg-gray-100 text-gray-600"
+                    disabled
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Payment Settings */}
+            <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-6 mb-6">
+              <div className="flex items-center justify-between mb-6">
+                <h3 className="text-lg font-semibold text-gray-900">Payment Settings</h3>
+                <button
+                  onClick={handleSavePayment}
+                  disabled={savingPayment}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-50"
+                >
+                  <Save size={16} /> {savingPayment ? "Saving..." : "Save"}
+                </button>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <label className="inline-flex items-center gap-2 text-sm text-gray-700">
+                  <input type="checkbox" checked={!!pay.enabled} onChange={(e) => setPay({ ...pay, enabled: e.target.checked })} />
+                  Enable payments
+                </label>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Provider</label>
+                  <select value={pay.provider || ""} onChange={(e) => setPay({ ...pay, provider: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md">
+                    <option value="">Select provider...</option>
+                    <option value="Razorpay">Razorpay</option>
+                    <option value="Stripe">Stripe</option>
+                    <option value="Cashfree">Cashfree</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Currency</label>
+                  <input value={pay.currency || ""} onChange={(e) => setPay({ ...pay, currency: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md" placeholder="INR" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Public Key</label>
+                  <input value={pay.public_key || ""} onChange={(e) => setPay({ ...pay, public_key: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md" placeholder="pk_..." />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Secret Key</label>
+                  <input type="password" value={pay.secret_key || ""} onChange={(e) => setPay({ ...pay, secret_key: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md" placeholder="sk_..." />
+                </div>
+              </div>
+            </div>
+
+            {/* Email Settings */}
+            <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-6 mb-6">
+              <div className="flex items-center justify-between mb-6">
+                <h3 className="text-lg font-semibold text-gray-900">Email Settings</h3>
+                <button
+                  onClick={handleSaveEmail}
+                  disabled={savingEmail}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-50"
+                >
+                  <Save size={16} /> {savingEmail ? "Saving..." : "Save"}
+                </button>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <label className="inline-flex items-center gap-2 text-sm text-gray-700">
+                  <input type="checkbox" checked={!!email.enabled} onChange={(e) => setEmail({ ...email, enabled: e.target.checked })} />
+                  Enable email
+                </label>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Provider</label>
+                  <select value={email.provider || "SMTP"} onChange={(e) => setEmail({ ...email, provider: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md">
+                    <option value="SMTP">SMTP</option>
+                    <option value="SendGrid">SendGrid</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">SMTP Host</label>
+                  <input value={email.smtp_host || ""} onChange={(e) => setEmail({ ...email, smtp_host: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md" placeholder="smtp.example.com" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">SMTP Port</label>
+                  <input type="number" value={email.smtp_port as any} onChange={(e) => setEmail({ ...email, smtp_port: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md" placeholder="587" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">SMTP User</label>
+                  <input value={email.smtp_user || ""} onChange={(e) => setEmail({ ...email, smtp_user: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md" placeholder="user@example.com" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">SMTP Password</label>
+                  <input type="password" value={email.smtp_password || ""} onChange={(e) => setEmail({ ...email, smtp_password: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md" placeholder="••••••••" />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">From Email</label>
+                  <input value={email.from_email || ""} onChange={(e) => setEmail({ ...email, from_email: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md" placeholder="no-reply@yourdomain.com" />
+                </div>
+              </div>
+            </div>
+
+            {/* Maps Settings */}
+            <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-6 mb-6">
+              <div className="flex items-center justify-between mb-6">
+                <h3 className="text-lg font-semibold text-gray-900">Google Maps Settings</h3>
+                <button
+                  onClick={handleSaveMaps}
+                  disabled={savingMaps}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-50"
+                >
+                  <Save size={16} /> {savingMaps ? "Saving..." : "Save"}
+                </button>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <label className="inline-flex items-center gap-2 text-sm text-gray-700">
+                  <input type="checkbox" checked={!!maps.enabled} onChange={(e) => setMaps({ ...maps, enabled: e.target.checked })} />
+                  Enable Maps
+                </label>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Provider</label>
+                  <input value={maps.provider || "google"} onChange={(e) => setMaps({ ...maps, provider: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md" />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Google Maps API Key</label>
+                  <input value={maps.google_api_key || ""} onChange={(e) => setMaps({ ...maps, google_api_key: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md" placeholder="AIza..." />
+                </div>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+  const router = useRouter();
+  const [me, setMe] = useState<Me | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [pwSaving, setPwSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [token, setToken] = useState<string>("");
+
+  const [name, setName] = useState("");
+  const [cell, setCell] = useState("");
+
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+
+  const base = useMemo(() => apiBase(), []);
+
+  useEffect(() => {
+    const t = localStorage.getItem("dc_access") || "";
+    if (!t) {
+      router.push("/login");
+      return;
+    }
+    setToken(t);
+    fetchMe(t);
+  }, [router]);
+
+  const fetchMe = async (accessToken: string) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`${base}me`, withTenantHeaders({
+        headers: { Authorization: `Bearer ${accessToken}` },
+      }));
+      if (res.status === 401) {
+        router.push("/login");
+        return;
+      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setMe(data);
+      setName(data.name || "");
+      setCell(data.cellnumber || "");
+    } catch (e: any) {
+      setError(e.message || "Failed to load settings");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const saveProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await fetch(`${base}me`, withTenantHeaders({
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ name, cellnumber: cell }),
+      }));
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.detail || `HTTP ${res.status}`);
+      }
+      await fetchMe(token);
+      alert("Profile updated");
+    } catch (e: any) {
+      setError(e.message || "Failed to save profile");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const changePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (newPassword !== confirmPassword) {
+      alert("Passwords do not match");
+      return;
+    }
+    setPwSaving(true);
+    setError(null);
+    try {
+      const res = await fetch(`${base}me/password`, withTenantHeaders({
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+      }));
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.detail || `HTTP ${res.status}`);
+      }
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      alert("Password changed");
+    } catch (e: any) {
+      setError(e.message || "Failed to change password");
+    } finally {
+      setPwSaving(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="flex items-center gap-2 text-gray-600">
+          <Loader2 className="animate-spin" /> Loading settings...
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50 py-8">
+      <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8">
+        <h1 className="text-2xl font-semibold text-gray-900 mb-6">Account Settings</h1>
+
+        {error && (
+          <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 mb-4">{error}</div>
+        )}
+
+        <div className="bg-white rounded-lg border border-gray-200 p-6 mb-6">
+          <h2 className="text-lg font-semibold text-gray-900 mb-4">Profile</h2>
+          <form onSubmit={saveProfile} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-500"
+                placeholder="Your name"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Phone</label>
+              <input
+                type="tel"
+                value={cell}
+                onChange={(e) => setCell(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-500"
+                placeholder="+1 (555) 000-0000"
+              />
+            </div>
+            <div className="md:col-span-2 flex justify-end gap-2 pt-2">
+              <button type="submit" disabled={saving} className="px-4 py-2 rounded-md bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-50">
+                {saving ? "Saving..." : "Save Changes"}
+              </button>
+            </div>
+          </form>
+        </div>
+
+        <div className="bg-white rounded-lg border border-gray-200 p-6">
+          <h2 className="text-lg font-semibold text-gray-900 mb-4">Change Password</h2>
+          <form onSubmit={changePassword} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="md:col-span-2">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Current Password</label>
+              <input
+                type="password"
+                value={currentPassword}
+                onChange={(e) => setCurrentPassword(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-500"
+                placeholder="Current password"
+                required
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">New Password</label>
+              <input
+                type="password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-500"
+                placeholder="At least 8 characters"
+                required
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Confirm New Password</label>
+              <input
+                type="password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-500"
+                placeholder="Re-enter new password"
+                required
+              />
+            </div>
+            <div className="md:col-span-2 flex justify-end gap-2 pt-2">
+              <button type="submit" disabled={pwSaving} className="px-4 py-2 rounded-md bg-gray-800 text-white hover:bg-black disabled:opacity-50">
+                {pwSaving ? "Updating..." : "Update Password"}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  );
+}

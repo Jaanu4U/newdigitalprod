@@ -25,6 +25,12 @@ class Organization(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     # Flexible JSON settings for payments/email/maps/etc.
     settings = Column(JSON, nullable=True)
+    # Address fields
+    address = Column(String, nullable=True)
+    city = Column(String, nullable=True)
+    state = Column(String, nullable=True)
+    pincode = Column(String, nullable=True)
+    country = Column(String, nullable=True)
 
     users = relationship("User", back_populates="org")
 
@@ -43,6 +49,10 @@ class User(Base):
     last_login = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     created_by = Column(String, nullable=True, index=True)  # creator's user_id
+    # Email verification fields
+    email_verified = Column(Boolean, default=False)
+    verification_token = Column(String, nullable=True, index=True)
+    token_expires_at = Column(DateTime, nullable=True)
 
     org = relationship("Organization", back_populates="users")
 
@@ -52,9 +62,51 @@ class Delivery(Base):
     org_id = Column(String, index=True, nullable=False)
     order_id = Column(String, nullable=False)
     customer = Column(String, nullable=False)
+    customer_phone = Column(String, nullable=True)
     address = Column(Text, nullable=False)
+    latitude = Column(String, nullable=True)
+    longitude = Column(String, nullable=True)
     status = Column(String, default="assigned")
+    rider_status = Column(String, nullable=True)  # assigned, accepted, in_transit, delivered, completed
+    assigned_rider_id = Column(String, ForeignKey("users.user_id"), nullable=True, index=True)
+    shipment_provider_id = Column(String, ForeignKey("shipment_providers.provider_id"), nullable=True)
+    tracking_number = Column(String, nullable=True)
+    # Audit timestamps
     created_at = Column(DateTime, default=datetime.utcnow)
+    assigned_at = Column(DateTime, nullable=True)
+    accepted_at = Column(DateTime, nullable=True)
+    in_transit_at = Column(DateTime, nullable=True)
+    delivered_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    estimated_delivery_minutes = Column(Integer, nullable=True)  # Estimated delivery time in minutes
+    # Audit locations
+    pickup_latitude = Column(String, nullable=True)
+    pickup_longitude = Column(String, nullable=True)
+    delivery_latitude = Column(String, nullable=True)
+    delivery_longitude = Column(String, nullable=True)
+    # Proof of delivery
+    pod_image_url = Column(String, nullable=True)
+    pod_signature_url = Column(String, nullable=True)
+    delivery_notes = Column(Text, nullable=True)
+
+class Customer(Base):
+    __tablename__ = "customers"
+    customer_id = Column(String, primary_key=True, default=gen_uuid)
+    org_id = Column(String, ForeignKey("organizations.org_id"), nullable=False, index=True)
+    ctype = Column(String, nullable=False)  # 'B2B' or 'B2C'
+    name = Column(String, nullable=False)
+    company_name = Column(String, nullable=True)
+    gstin = Column(String, nullable=True)
+    email = Column(String, nullable=True)
+    phone = Column(String, nullable=True)
+    address = Column(Text, nullable=True)
+    city = Column(String, nullable=True)
+    state = Column(String, nullable=True)
+    pin = Column(String, nullable=True)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_by = Column(String, nullable=True)
 
 class SyncLog(Base):
     __tablename__ = "sync_log"
@@ -64,3 +116,71 @@ class SyncLog(Base):
     type = Column(String, nullable=False)
     payload = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+# Platform-wide settings (single row table)
+class PlatformSettings(Base):
+    __tablename__ = "platform_settings"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    email_config = Column(JSON, nullable=True)
+
+
+# Shipment Providers (platform-wide courier/delivery partners)
+class ShipmentProvider(Base):
+    __tablename__ = "shipment_providers"
+    provider_id = Column(String, primary_key=True, default=gen_uuid)
+    name = Column(String, nullable=False)
+    code = Column(String, unique=True, index=True, nullable=False)
+    tracking_url = Column(String, nullable=True)
+    active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+# Payments table for UPI/Cash/Card payment tracking
+class Payment(Base):
+    __tablename__ = "payments"
+    payment_id = Column(String, primary_key=True, default=gen_uuid)
+    org_id = Column(String, ForeignKey("organizations.org_id"), nullable=False, index=True)
+    order_id = Column(String, nullable=True, index=True)  # Invoice/Order ID
+    delivery_id = Column(String, ForeignKey("deliveries.delivery_id"), nullable=True, index=True)
+    customer_id = Column(String, nullable=True)
+    customer_name = Column(String, nullable=True)
+    customer_phone = Column(String, nullable=True)
+    
+    # Amount details
+    amount = Column(String, nullable=False)  # Stored as string to preserve precision
+    currency = Column(String, default="INR")
+    
+    # Payment method details
+    payment_method = Column(String, default="UPI")  # UPI/Cash/Card/Online
+    upi_vpa = Column(String, nullable=True)  # Merchant UPI ID
+    upi_transaction_id = Column(String, nullable=True, index=True)  # UPI transaction ID
+    upi_ref_id = Column(String, nullable=True)  # Bank reference number
+    
+    # Status tracking
+    status = Column(String, default="pending", index=True)  # pending/initiated/processing/success/failed/cancelled/refunded
+    payment_initiated_at = Column(DateTime, nullable=True)
+    payment_completed_at = Column(DateTime, nullable=True, index=True)
+    
+    # Collection details
+    collected_by = Column(String, ForeignKey("users.user_id"), nullable=True, index=True)
+    collected_by_name = Column(String, nullable=True)
+    collection_latitude = Column(String, nullable=True)
+    collection_longitude = Column(String, nullable=True)
+    
+    # QR code tracking
+    qr_code_generated = Column(Boolean, default=False)
+    qr_generated_at = Column(DateTime, nullable=True)
+    qr_expires_at = Column(DateTime, nullable=True)
+    
+    # Payment gateway details
+    gateway_provider = Column(String, nullable=True)  # razorpay/phonepe/paytm/cashfree
+    gateway_order_id = Column(String, nullable=True, index=True)
+    gateway_payment_id = Column(String, nullable=True, index=True)
+    gateway_response = Column(Text, nullable=True)  # Raw JSON response
+    
+    # Metadata
+    notes = Column(Text, nullable=True)
+    receipt_url = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

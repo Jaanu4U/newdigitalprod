@@ -252,20 +252,23 @@ def create_user(user_data: schemas.CreateUserIn, db: Session = Depends(get_db)):
 
 @router.get("/superadmin/users", response_model=List[dict])
 def get_all_users(db: Session = Depends(get_db)):
-    """Get all users (SuperAdmin, Admin, Staff)."""
+    """Get all users (SuperAdmin, Admin, Staff) with org details."""
     
     users = db.query(models.User).all()
     
     user_list = [
         {
             "user_id": u.user_id,
+            "org_id": u.org_id,
+            "org_name": u.org.name if u.org else None,
             "email": u.email,
             "name": u.name,
             "cellnumber": u.cellnumber,
             "role": u.role,
             "team": u.team,
             "status": u.status,
-            "created_at": u.created_at.isoformat() if u.created_at else None
+            "created_at": u.created_at.isoformat() if u.created_at else None,
+            "created_by": u.created_by
         }
         for u in users
     ]

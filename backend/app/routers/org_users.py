@@ -8,6 +8,7 @@ from ..db import get_db
 from .. import models, schemas
 from ..deps import get_current_principal, CurrentPrincipal
 from ..security import hash_password
+from ..utils.email import send_rider_welcome_email
 
 router = APIRouter()
 
@@ -129,6 +130,24 @@ def create_org_user(
     db.add(user)
     db.commit()
     db.refresh(user)
+    
+    # Send welcome email to all users with their login credentials
+    try:
+        # Get organization details
+        org = db.query(models.Organization).filter(models.Organization.org_id == principal.org_id).first()
+        if org:
+            send_rider_welcome_email(
+                db=db,
+                to_email=user.email,
+                rider_name=user.name,
+                temp_password=temp_password,
+                org_name=org.name,
+                org_slug=org.slug
+            )
+    except Exception as e:
+        # Log error but don't fail user creation
+        print(f"[Warning] Failed to send welcome email: {str(e)}")
+    
     return {"status": "ok", "user_id": user.user_id, "temp_password": temp_password}
 
 

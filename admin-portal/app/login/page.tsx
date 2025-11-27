@@ -14,6 +14,9 @@ export default function Login() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [orgExists, setOrgExists] = useState<boolean | null>(null);
+  const [showResendButton, setShowResendButton] = useState(false);
+  const [resendLoading, setResendLoading] = useState(false);
+  const [resendSuccess, setResendSuccess] = useState(false);
 
   const slug = getTenantSlugFromHost();
 
@@ -39,7 +42,7 @@ export default function Login() {
     async function run() {
       if (!slug) { setOrgExists(null); return; }
       try {
-  const r = await fetch(`${apiBase()}org/check?slug=${encodeURIComponent(slug)}`, { cache: "no-store" });
+  const r = await fetch(`${apiBase()}v1/org/check?slug=${encodeURIComponent(slug)}`, { cache: "no-store" });
         const j = await r.json().catch(()=>({}));
         const available = Boolean(j?.slug?.available);
         if (alive) setOrgExists(!available); // exists = !available
@@ -67,13 +70,20 @@ export default function Login() {
     try {
       if (slug) {
         // Tenant org login (host or X-Org resolves org)
-  const res = await fetch(`${apiBase()}auth/login`, withTenantHeaders({
+  const res = await fetch(`${apiBase()}v1/auth/login`, withTenantHeaders({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ email, password })
         }));
         if (!res.ok) {
           const data = await res.json().catch(()=>({}));
+          // Check if email not verified (403)
+          if (res.status === 403) {
+            setError("Email not verified. Please verify your email before logging in.");
+            setShowResendButton(true);
+            setLoading(false);
+            return;
+          }
           throw new Error(data.detail ?? "Login failed");
         }
         const data = await res.json();
@@ -82,12 +92,12 @@ export default function Login() {
         localStorage.setItem("dc_email", email);
         localStorage.setItem("dc_role", data.user?.role || "User");
         localStorage.setItem("dc_org_id", data.org_id || "");
-        router.push("/deliveries");
+        router.push("/dashboard");
         return;
       }
 
       // SuperAdmin login on apex
-  const res = await fetch(`${apiBase()}auth/superadmin-login`, {
+  const res = await fetch(`${apiBase()}v1/auth/superadmin-login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password }),
@@ -107,6 +117,28 @@ export default function Login() {
       setError(err.message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleResendVerification = async () => {
+    if (!email) return;
+    setResendLoading(true);
+    setResendSuccess(false);
+    try {
+      const res = await fetch(`${apiBase()}v1/org/resend-verification?email=${encodeURIComponent(email)}`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || "Failed to resend verification email");
+      }
+      setResendSuccess(true);
+      setError("Verification email sent! Please check your inbox and spam folder.");
+      setShowResendButton(false);
+    } catch (err: any) {
+      setError(err.message || "Failed to resend verification email");
+    } finally {
+      setResendLoading(false);
     }
   };
 
@@ -162,7 +194,19 @@ export default function Login() {
           </div>
 
           {error && (
-            <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>
+            <div className={`mb-4 rounded-md border ${resendSuccess ? 'border-green-200 bg-green-50 text-green-700' : 'border-red-200 bg-red-50 text-red-700'} px-3 py-2 text-sm`}>
+              {error}
+              {showResendButton && (
+                <button
+                  type="button"
+                  onClick={handleResendVerification}
+                  disabled={resendLoading}
+                  className="mt-2 w-full inline-flex items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-60 transition-colors"
+                >
+                  {resendLoading ? "Sending..." : "Resend Verification Email"}
+                </button>
+              )}
+            </div>
           )}
 
           <form onSubmit={onSubmit} className="grid gap-4">

@@ -1,0 +1,17 @@
+                         Table "public.deliveries"
+   Column    |            Type             | Collation | Nullable | Default 
+-------------+-----------------------------+-----------+----------+---------
+ delivery_id | character varying           |           | not null | 
+ org_id      | character varying           |           | not null | 
+ order_id    | character varying           |           | not null | 
+ customer    | character varying           |           | not null | 
+ address     | text                        |           | not null | 
+ status      | character varying           |           |          | 
+ provider_id | character varying           |           |          | 
+ created_at  | timestamp without time zone |           |          | 
+Indexes:
+    "deliveries_pkey" PRIMARY KEY, btree (delivery_id)
+    "ix_deliveries_created_at" btree (created_at)
+    "ix_deliveries_org_id" btree (org_id)
+    "ix_deliveries_provider_id" btree (provider_id)
+

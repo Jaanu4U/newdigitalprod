@@ -9,16 +9,29 @@ router = APIRouter()
 
 @router.post("/login", response_model=schemas.TokenOut)
 def login(payload: schemas.LoginIn, request: Request, db: Session = Depends(get_db)):
+    import logging
+    logger = logging.getLogger(__name__)
+    
     org_id = payload.org_id
+    logger.info(f"Login attempt - email: {payload.email}, org_id provided: {org_id}")
+    
     if not org_id:
         org = resolve_tenant(request, db)
         if org is None:
             raise HTTPException(status_code=400, detail="Missing org_id and no tenant resolved from host")
         org_id = org.org_id
+        logger.info(f"Resolved org_id from tenant: {org_id}")
 
     user = db.query(models.User).filter(models.User.org_id == org_id, models.User.email == payload.email).first()
+    logger.info(f"User lookup - found: {user is not None}, org_id: {org_id}")
+    
     if not user or not verify_password(payload.password, user.password_hash):
+        logger.warning(f"Login failed - user: {user is not None}, password_match: {verify_password(payload.password, user.password_hash) if user else False}")
         raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    # Check if email is verified
+    if not user.email_verified:
+        raise HTTPException(status_code=403, detail="Email not verified. Please verify your email before logging in.")
 
     access = create_token({"sub": user.user_id, "org_id": user.org_id, "role": user.role})
     refresh = create_token({"sub": user.user_id, "org_id": user.org_id, "type": "refresh"}, expires_in=60*60*24*30)

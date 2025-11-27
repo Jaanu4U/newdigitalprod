@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Audit API Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 1200px; margin: 20px auto; padding: 20px; }
+        .order { border: 1px solid #ddd; margin: 10px 0; padding: 15px; border-radius: 5px; }
+        .completed { background-color: #d4edda; }
+        .assigned { background-color: #fff3cd; }
+        img { max-width: 300px; border: 1px solid #ddd; margin-top: 10px; }
+        .error { color: red; padding: 10px; background: #ffeeee; }
+        .pod { background: #f8f9fa; padding: 10px; margin-top: 10px; border-left: 3px solid #28a745; }
+    </style>
+</head>
+<body>
+    <h1>Audit API Test</h1>
+    <div id="login">
+        <h3>Login</h3>
+        <input type="email" id="email" placeholder="Email" value="jugeshr@gmail.com">
+        <input type="password" id="password" placeholder="Password" value="password">
+        <button onclick="login()">Login</button>
+    </div>
+    <div id="result"></div>
+    
+    <script>
+        let token = '';
+        const API_BASE = 'https://api.digitalchain.in/v1/';
+        
+        async function login() {
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            
+            try {
+                const response = await fetch(API_BASE + 'auth/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Org': 'jugesh'
+                    },
+                    body: JSON.stringify({ email, password })
+                });
+                
+                const data = await response.json();
+                
+                if (data.access_token) {
+                    token = data.access_token;
+                    document.getElementById('result').innerHTML = '<p style="color: green;">✓ Logged in successfully!</p>';
+                    loadAuditData();
+                } else {
+                    document.getElementById('result').innerHTML = '<div class="error">Login failed: ' + JSON.stringify(data) + '</div>';
+                }
+            } catch (err) {
+                document.getElementById('result').innerHTML = '<div class="error">Error: ' + err.message + '</div>';
+            }
+        }
+        
+        async function loadAuditData() {
+            if (!token) {
+                document.getElementById('result').innerHTML = '<div class="error">Please login first</div>';
+                return;
+            }
+            
+            try {
+                const response = await fetch(API_BASE + 'admin/orders/audit', {
+                    headers: {
+                        'Authorization': 'Bearer ' + token,
+                        'X-Org': 'jugesh'
+                    }
+                });
+                
+                const data = await response.json();
+                
+                if (data.orders) {
+                    let html = '<h2>Summary</h2>';
+                    html += `<p>Total Orders: ${data.summary.total_orders}</p>`;
+                    html += `<p>Completed: ${data.summary.completed_orders}</p>`;
+                    html += `<p>Assigned: ${data.summary.assigned_orders}</p>`;
+                    html += `<p>Total Amount: ₹${data.summary.total_amount}</p>`;
+                    
+                    html += '<h2>Orders</h2>';
+                    data.orders.forEach(order => {
+                        html += `<div class="order ${order.status}">`;
+                        html += `<h3>${order.invoice_no} - ${order.customer_name}</h3>`;
+                        html += `<p><strong>Status:</strong> ${order.status.toUpperCase()}</p>`;
+                        html += `<p><strong>Amount:</strong> ₹${order.amount}</p>`;
+                        html += `<p><strong>Rider:</strong> ${order.rider_name || 'Not assigned'}</p>`;
+                        html += `<p><strong>Address:</strong> ${order.delivery_address}</p>`;
+                        
+                        if (order.pod_image_url) {
+                            html += `<div class="pod">`;
+                            html += `<strong>✓ Proof of Delivery:</strong><br>`;
+                            html += `<img src="https://api.digitalchain.in${order.pod_image_url}" 
+                                     onerror="this.src=''; this.alt='Failed to load image'">`;
+                            html += `<p><small>${order.pod_image_url}</small></p>`;
+                            html += `</div>`;
+                        } else {
+                            html += `<p style="color: #999;">✗ No POD image</p>`;
+                        }
+                        
+                        html += `</div>`;
+                    });
+                    
+                    document.getElementById('result').innerHTML = html;
+                } else {
+                    document.getElementById('result').innerHTML = '<div class="error">No orders data: ' + JSON.stringify(data) + '</div>';
+                }
+            } catch (err) {
+                document.getElementById('result').innerHTML = '<div class="error">Error: ' + err.message + '</div>';
+            }
+        }
+    </script>
+</body>
+</html>

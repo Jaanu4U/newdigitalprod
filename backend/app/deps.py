@@ -44,3 +44,19 @@ def get_current_user(authorization: Optional[str] = Header(None)) -> CurrentPrin
         return CurrentPrincipal(user_id=sub, org_id=org_id, role=role)
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
+
+
+async def get_current_principal_ws(token: str) -> Optional[CurrentPrincipal]:
+    """Validate WebSocket token"""
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALG])
+        sub = payload.get("sub")
+        org_id = payload.get("org_id")
+        role = payload.get("role")
+        if not sub or not org_id:
+            return None
+        return CurrentPrincipal(user_id=sub, org_id=org_id, role=role)
+    except JWTError:
+        return None

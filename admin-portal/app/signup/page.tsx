@@ -18,64 +18,49 @@ async function checkAvailability(slug?: string, domain?: string) {
   const params = new URLSearchParams()
   if (slug) params.set('slug', slug)
   if (domain) params.set('domain', domain)
-  const res = await fetch(`${apiBase()}org/check?${params.toString()}`, { cache: 'no-store' })
+  const res = await fetch(`${apiBase()}v1/org/check?${params.toString()}`, { cache: 'no-store' })
   if (!res.ok) return {}
   return res.json()
 }
 
 export default function SignupPage() {
   const [orgName, setOrgName] = useState("")
+  const [subdomain, setSubdomain] = useState("")
   const [adminName, setAdminName] = useState("")
   const [adminEmail, setAdminEmail] = useState("")
   const [adminPhone, setAdminPhone] = useState("")
   const [password, setPassword] = useState("")
-  const [slug, setSlug] = useState("")
-  const [domain, setDomain] = useState("")
+  const [address, setAddress] = useState("")
+  const [city, setCity] = useState("")
+  const [state, setState] = useState("")
+  const [pincode, setPincode] = useState("")
+  const [country, setCountry] = useState("India")
+  const [region, setRegion] = useState("Asia/Kolkata")
+  const [plan, setPlan] = useState("free")
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string|null>(null)
-  const [slugStatus, setSlugStatus] = useState<{valid?: boolean; available?: boolean; reason?: string} | null>(null)
-  const [domainStatus, setDomainStatus] = useState<{valid?: boolean; available?: boolean; reason?: string} | null>(null)
+  const [success, setSuccess] = useState(false)
+  const [checkingSlug, setCheckingSlug] = useState(false)
+  const [slugAvailable, setSlugAvailable] = useState<boolean|null>(null)
 
   useEffect(() => {
-    const t = setTimeout(async () => {
-      if (!slug && orgName) {
-        const s = orgName.toLowerCase().replace(/[^a-z0-9\-\s]/g,'').trim().replace(/\s+/g,'-').slice(0,48)
-        setSlug(s)
-      }
-    }, 200)
-    return () => clearTimeout(t)
-  }, [orgName])
-
-  useEffect(() => {
-    const t = setTimeout(async () => {
-      if (!slug) { setSlugStatus(null); return }
-      try {
-        const r = await checkAvailability(slug, undefined)
-        const s = r?.slug || {}
-        // Backend now only checks uniqueness; valid=true always
-        setSlugStatus({ valid: true, available: s.available })
-      } catch { setSlugStatus(null) }
-    }, 300)
-    return () => clearTimeout(t)
-  }, [slug])
-
-  useEffect(() => {
-    const t = setTimeout(async () => {
-      if (!domain) { setDomainStatus(null); return }
-      try {
-        const r = await checkAvailability(undefined, domain)
-        const d = r?.domain || {}
-        setDomainStatus({ valid: d.valid, available: d.available, reason: d.reason })
-      } catch { setDomainStatus(null) }
-    }, 400)
-    return () => clearTimeout(t)
-  }, [domain])
+    if (!subdomain) {
+      setSlugAvailable(null)
+      return
+    }
+    const timer = setTimeout(async () => {
+      setCheckingSlug(true)
+      const res = await checkAvailability(subdomain)
+      // Handle nested response structure
+      setSlugAvailable(res.slug?.available === true)
+      setCheckingSlug(false)
+    }, 500)
+    return () => clearTimeout(timer)
+  }, [subdomain])
 
   const canSubmit = useMemo(() => {
-    const slugOk = slug ? (slugStatus ? slugStatus.available !== false : true) : false
-    const domainOk = domain ? (domainStatus ? domainStatus.valid !== false && domainStatus.available !== false : true) : true
-    return Boolean(orgName && adminName && adminEmail && password && slugOk && domainOk)
-  }, [orgName, adminName, adminEmail, password, slug, slugStatus, domain, domainStatus])
+    return Boolean(orgName && subdomain && adminName && adminEmail && password && slugAvailable)
+  }, [orgName, subdomain, adminName, adminEmail, password, slugAvailable])
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -83,17 +68,23 @@ export default function SignupPage() {
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch(`${apiBase()}org/register`, {
+      const res = await fetch(`${apiBase()}v1/org/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           org_name: orgName,
+          slug: subdomain,
           admin_name: adminName,
           admin_email: adminEmail,
           admin_phone: adminPhone || undefined,
           admin_password: password,
-          custom_domain: domain || undefined,
-          slug: slug || undefined
+          address: address || undefined,
+          city: city || undefined,
+          state: state || undefined,
+          pincode: pincode || undefined,
+          country: country || undefined,
+          region: region || undefined,
+          plan: plan || undefined,
         })
       })
       if (!res.ok) {
@@ -101,12 +92,7 @@ export default function SignupPage() {
         throw new Error(j.detail || 'Signup failed')
       }
       const out = await res.json()
-      const s = out.slug || slug
-      if (s) {
-        window.location.href = `https://${s}.digitalchain.in/login`
-      } else {
-        window.location.href = '/login'
-      }
+      setSuccess(true)
     } catch (err:any) {
       setError(err.message || 'Failed to create organization')
     } finally {
@@ -120,56 +106,173 @@ export default function SignupPage() {
         <h1 className="text-3xl font-bold">Create your organization</h1>
         <p className="text-gray-600 mt-1">Start with a few details. You can change settings later.</p>
 
-        <form className="mt-8 space-y-5" onSubmit={onSubmit}>
+        {success ? (
+          <div className="mt-8 bg-green-50 border border-green-200 rounded-lg p-8 text-center">
+            <div className="mb-4">
+              <svg className="mx-auto h-16 w-16 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            </div>
+            <h2 className="text-2xl font-bold text-gray-900 mb-2">Check Your Email</h2>
+            <p className="text-gray-700 mb-4">
+              We've sent a verification email to <strong>{adminEmail}</strong>
+            </p>
+            <p className="text-gray-600 mb-6">
+              Please check your inbox and click the verification link to activate your account.
+            </p>
+            <p className="text-sm text-gray-500">
+              Didn't receive the email? Check your spam folder or contact support.
+            </p>
+          </div>
+        ) : (
+          <form className="mt-8 space-y-5" onSubmit={onSubmit}>
 
-          <div className="grid md:grid-cols-2 gap-5">
-            <div>
-              <label className="block text-sm font-medium">Organization name</label>
-              <input className="mt-1 w-full border rounded-md px-3 py-2" value={orgName} onChange={e=>setOrgName(e.target.value)} required />
-            </div>
-            <div>
-              <label className="block text-sm font-medium">Subdomain (unique)</label>
-              <input className={`mt-1 w-full border rounded-md px-3 py-2 ${slugStatus?.available===false ? 'border-red-400' : ''}`} value={slug} onChange={e=>setSlug(e.target.value.toLowerCase())} placeholder="acme" required />
-              {/* Live preview of the full org URL */}
-              {slug ? (
-                <p className={`text-sm mt-1 ${slugStatus?.available===false ? 'text-red-600' : slugStatus?.available ? 'text-green-600' : 'text-gray-600'}`}>
-                  {slug}.digitalchain.in {slugStatus?.available===false ? 'is not available' : slugStatus?.available ? 'is available' : ''}
-                </p>
-              ) : (
-                <p className="text-sm text-gray-500 mt-1">Example: acme.digitalchain.in</p>
-              )}
-            </div>
+          <div>
+            <label className="block text-sm font-medium">Organization name</label>
+            <input className="mt-1 w-full border rounded-md px-3 py-2" value={orgName} onChange={e=>setOrgName(e.target.value)} required />
           </div>
 
-          <div className="grid md:grid-cols-2 gap-5">
+          <div>
+            <label className="block text-sm font-medium">Subdomain</label>
+            <div className="mt-1 flex rounded-md shadow-sm">
+              <input
+                className="flex-1 border rounded-l-md px-3 py-2"
+                value={subdomain}
+                onChange={e=>setSubdomain(e.target.value.toLowerCase())}
+                placeholder="mycompany"
+                required
+              />
+              <span className="inline-flex items-center px-3 rounded-r-md border border-l-0 bg-gray-50 text-gray-500 text-sm">
+                .digitalchain.in
+              </span>
+            </div>
+            {checkingSlug && <p className="text-xs text-gray-500 mt-1">Checking availability...</p>}
+            {slugAvailable === true && <p className="text-xs text-green-600 mt-1">✓ Available</p>}
+            {slugAvailable === false && <p className="text-xs text-red-600 mt-1">✗ Already taken</p>}
+          </div>
+
+          <div className="border-t pt-5 mt-2">
+            <h3 className="text-lg font-semibold mb-4">Admin User</h3>
+            
             <div>
               <label className="block text-sm font-medium">Admin name</label>
               <input className="mt-1 w-full border rounded-md px-3 py-2" value={adminName} onChange={e=>setAdminName(e.target.value)} required />
             </div>
-            <div>
+
+            <div className="mt-5">
               <label className="block text-sm font-medium">Admin email</label>
               <input type="email" className="mt-1 w-full border rounded-md px-3 py-2" value={adminEmail} onChange={e=>setAdminEmail(e.target.value)} required />
             </div>
-          </div>
 
-          <div className="grid md:grid-cols-2 gap-5">
-            <div>
-              <label className="block text-sm font-medium">Phone number</label>
-              <input className="mt-1 w-full border rounded-md px-3 py-2" value={adminPhone} onChange={e=>setAdminPhone(e.target.value)} placeholder="+91..." />
+            <div className="mt-5">
+              <label className="block text-sm font-medium">Admin phone (optional)</label>
+              <input className="mt-1 w-full border rounded-md px-3 py-2" value={adminPhone} onChange={e=>setAdminPhone(e.target.value)} placeholder="+91 98765 43210" />
             </div>
-            <div>
+
+            <div className="mt-5">
               <label className="block text-sm font-medium">Password</label>
               <input type="password" className="mt-1 w-full border rounded-md px-3 py-2" value={password} onChange={e=>setPassword(e.target.value)} required />
             </div>
           </div>
 
-          <div>
-            <label className="block text-sm font-medium">Organization website (optional)</label>
-            <input className={`mt-1 w-full border rounded-md px-3 py-2 ${domainStatus?.valid===false || domainStatus?.available===false ? 'border-red-400' : ''}`} value={domain} onChange={e=>setDomain(e.target.value.toLowerCase())} placeholder="yourcompany.com" />
-            {domainStatus?.valid===false && <p className="text-sm text-red-600 mt-1">Invalid domain format</p>}
-            {domain && domainStatus?.valid && domainStatus?.available===false && <p className="text-sm text-red-600 mt-1">Domain already in use</p>}
-            {domain && domainStatus?.valid && domainStatus?.available && <p className="text-sm text-green-600 mt-1">Available</p>}
-            <p className="text-xs text-gray-500 mt-1">Optional: use your own website/domain later via DNS (CNAME/A) setup.</p>
+          <div className="border-t pt-5 mt-2">
+            <h3 className="text-lg font-semibold mb-4">Organization Address</h3>
+            
+            <div>
+              <label className="block text-sm font-medium">Street Address</label>
+              <input 
+                className="mt-1 w-full border rounded-md px-3 py-2" 
+                value={address} 
+                onChange={e=>setAddress(e.target.value)} 
+                placeholder="123 Main Street, Building A"
+              />
+            </div>
+
+            <div className="grid md:grid-cols-3 gap-5 mt-5">
+              <div>
+                <label className="block text-sm font-medium">City</label>
+                <input 
+                  className="mt-1 w-full border rounded-md px-3 py-2" 
+                  value={city} 
+                  onChange={e=>setCity(e.target.value)}
+                  placeholder="Mumbai"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium">State/Province</label>
+                <input 
+                  className="mt-1 w-full border rounded-md px-3 py-2" 
+                  value={state} 
+                  onChange={e=>setState(e.target.value)}
+                  placeholder="Maharashtra"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium">PIN/ZIP Code</label>
+                <input 
+                  className="mt-1 w-full border rounded-md px-3 py-2" 
+                  value={pincode} 
+                  onChange={e=>setPincode(e.target.value)}
+                  placeholder="400001"
+                />
+              </div>
+            </div>
+
+            <div className="mt-5">
+              <label className="block text-sm font-medium">Country</label>
+              <select 
+                className="mt-1 w-full border rounded-md px-3 py-2"
+                value={country}
+                onChange={e=>setCountry(e.target.value)}
+              >
+                <option value="India">India</option>
+                <option value="United States">United States</option>
+                <option value="United Kingdom">United Kingdom</option>
+                <option value="Australia">Australia</option>
+                <option value="United Arab Emirates">United Arab Emirates</option>
+                <option value="Singapore">Singapore</option>
+                <option value="Malaysia">Malaysia</option>
+                <option value="China">China</option>
+                <option value="Japan">Japan</option>
+                <option value="South Korea">South Korea</option>
+                <option value="Other">Other</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="border-t pt-5 mt-2">
+            <h3 className="text-lg font-semibold mb-4">Settings</h3>
+            
+            <div>
+              <label className="block text-sm font-medium">Region/Timezone</label>
+              <select 
+                className="mt-1 w-full border rounded-md px-3 py-2"
+                value={region}
+                onChange={e=>setRegion(e.target.value)}
+              >
+                <option value="Asia/Kolkata">India (Asia/Kolkata)</option>
+                <option value="America/New_York">US East (America/New_York)</option>
+                <option value="America/Los_Angeles">US West (America/Los_Angeles)</option>
+                <option value="Europe/London">UK (Europe/London)</option>
+                <option value="Australia/Sydney">Australia (Australia/Sydney)</option>
+                <option value="Asia/Dubai">UAE (Asia/Dubai)</option>
+                <option value="Asia/Singapore">Singapore (Asia/Singapore)</option>
+              </select>
+            </div>
+
+            <div className="mt-5">
+              <label className="block text-sm font-medium">Plan</label>
+              <select 
+                className="mt-1 w-full border rounded-md px-3 py-2"
+                value={plan}
+                onChange={e=>setPlan(e.target.value)}
+              >
+                <option value="free">Free</option>
+                <option value="basic">Basic</option>
+                <option value="pro">Professional</option>
+                <option value="enterprise">Enterprise</option>
+              </select>
+            </div>
           </div>
 
           {error && <div className="rounded-md border border-red-200 bg-red-50 text-red-700 px-4 py-2">{error}</div>}
@@ -183,6 +286,7 @@ export default function SignupPage() {
             {loading? 'Creating...' : 'Create Organization'}
           </button>
         </form>
+        )}
       </div>
     </div>
   )

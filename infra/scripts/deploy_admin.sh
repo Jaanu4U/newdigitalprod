@@ -1,39 +1,56 @@
 #!/usr/bin/env bash
-# Idempotent deploy script for the Admin Portal on the server
-# Usage: sudo bash deploy_admin.sh [/opt/digitalchain/admin-portal] [digitalchain-admin]
+# Deploy the Next.js admin portal on a Linux host with systemd
+# Usage: sudo /opt/digitalchain/infra/scripts/deploy_admin.sh
 set -euo pipefail
 
-APP_DIR=${1:-/opt/digitalchain/admin-portal}
-SERVICE=${2:-digitalchain-admin}
-RUN_AS=${RUN_AS:-www-data}
+SERVICE="digitalchain-admin.service"
+APP_DIR="/opt/digitalchain/admin-portal"
+RUN_AS="www-data"
+NODE_ENV="production"
 
-echo "==> Stopping service: $SERVICE"
-systemctl stop "$SERVICE" || true
+echo "==> Deploying Digitalchain Admin Portal"
+echo "Service: ${SERVICE}"
+echo "App dir: ${APP_DIR}"
 
-cd "$APP_DIR"
+if [[ ! -d "${APP_DIR}" ]]; then
+  echo "ERROR: ${APP_DIR} not found on this server." >&2
+  exit 1
+fi
 
-echo "==> Cleaning and installing dependencies (user: $RUN_AS)"
-su -s /bin/bash -c "rm -rf node_modules .next && npm ci" "$RUN_AS"
+echo "==> Stopping service (if running): ${SERVICE}"
+systemctl stop "${SERVICE}" || true
 
-echo "==> Building Next.js (user: $RUN_AS)"
-su -s /bin/bash -c "npm run build" "$RUN_AS"
+pushd "${APP_DIR}" >/dev/null
 
-echo "==> Build ID:"
-cat .next/BUILD_ID || true
+echo "==> Current build id (if running on localhost:3000)"
+set +e
+curl -fsS http://localhost:3000/build-id && echo || echo "n/a"
+set -e
 
-echo "==> Users chunk(s):"
-ls -l .next/static/chunks/app/users/ || true
+echo "==> Ensuring ownership for ${RUN_AS}"
+chown -R ${RUN_AS}:${RUN_AS} "${APP_DIR}" || true
 
-echo "==> CSS files:"
-ls -l .next/static/css/ || true
+echo "==> Cleaning previous install/cache"
+sudo -u ${RUN_AS} rm -rf node_modules .next || true
 
-echo "==> Starting service: $SERVICE"
-systemctl start "$SERVICE"
-systemctl status "$SERVICE" --no-pager || true
+echo "==> Installing dependencies"
+sudo -u ${RUN_AS} npm ci --no-audit --no-fund
 
-echo "==> Tail last 30 log lines"
-journalctl -u "$SERVICE" -n 30 --no-pager || true
+echo "==> Building Next.js"
+sudo -u ${RUN_AS} NODE_ENV=${NODE_ENV} npm run -s build
 
-echo "==> Done. Validate assets via:"
-echo "    curl -sS https://admin.digitalchain.in/users | grep -oE '/_next/static/[^\"\n]+page-[^\"\n]+\.js' | head -n 1"
-echo "    curl -sSI \"https://admin.digitalchain.in<_PATH_FROM_ABOVE_>\" --max-time 15"
+echo "==> Build artifacts"
+sudo -u ${RUN_AS} bash -lc 'echo -n "BUILD_ID: "; cat .next/BUILD_ID || true'
+
+echo "==> Starting service ${SERVICE}"
+systemctl start "${SERVICE}"
+sleep 2
+systemctl --no-pager --full status "${SERVICE}" || true
+
+echo "==> New build id (from localhost:3000/build-id if available)"
+set +e
+curl -fsS http://localhost:3000/build-id && echo || echo "n/a"
+set -e
+
+popd >/dev/null
+echo "==> Done"

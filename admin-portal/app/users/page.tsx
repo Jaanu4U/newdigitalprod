@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Users as UsersIcon, Plus, Trash2, Edit2, Mail, Phone, Shield, Check, X, Search } from "lucide-react";
+import { Users as UsersIcon, Plus, Trash2, Edit2, Mail, Phone, Shield, Check, X, Search, Building2, User } from "lucide-react";
+import PageHeader from "@/components/PageHeader";
 import { apiBase } from "@/lib/api";
 import { getTenantSlugFromHost } from "@/lib/tenant";
 
@@ -15,6 +16,8 @@ interface User {
   team: string | null;
   status: string;
   created_at: string | null;
+  org_id?: string | null;
+  org_name?: string | null;
 }
 
 export default function UserManagementPage() {
@@ -24,6 +27,7 @@ export default function UserManagementPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [token, setToken] = useState<string>("");
+  const [activeTab, setActiveTab] = useState<"platform" | "org">("platform");
   
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -86,7 +90,7 @@ export default function UserManagementPage() {
   const fetchUsers = async (accessToken: string) => {
     try {
       const base = apiBase();
-      const url = `${base}superadmin/users`;
+      const url = `${base}v1/superadmin/users`;
       
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
@@ -127,6 +131,11 @@ export default function UserManagementPage() {
     }
   };
 
+  // Filter users by type
+  const platformUsers = users.filter(u => !u.org_id && u.role === "SuperAdmin");
+  const orgUsers = users.filter(u => u.org_id);
+  const displayUsers = activeTab === "platform" ? platformUsers : orgUsers;
+
   const handleAddUser = async (e: React.FormEvent) => {
     e.preventDefault();
     
@@ -137,7 +146,7 @@ export default function UserManagementPage() {
 
     try {
       const base = apiBase();
-      const res = await fetch(`${base}superadmin/users/create`, {
+      const res = await fetch(`${base}v1/superadmin/users/create`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -178,7 +187,7 @@ export default function UserManagementPage() {
 
     try {
       const base = apiBase();
-      const res = await fetch(`${base}superadmin/users/${userId}`, {
+      const res = await fetch(`${base}v1/superadmin/users/${userId}`, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -213,7 +222,7 @@ export default function UserManagementPage() {
 
     try {
       const base = apiBase();
-      const res = await fetch(`${base}superadmin/users/${editingId}`, {
+      const res = await fetch(`${base}v1/superadmin/users/${editingId}`, {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
@@ -239,7 +248,7 @@ export default function UserManagementPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50 py-8">
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 py-8">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-center h-64">
             <div className="text-center">
@@ -262,14 +271,44 @@ export default function UserManagementPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 py-8">
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 py-8">
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
         {/* Header */}
         <div className="mb-8">
-          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between mb-6">
-            <div className="flex items-center gap-3">
-              <UsersIcon size={32} className="text-brand-600" />
-              <h1 className="text-3xl font-bold text-gray-900">User Management</h1>
+          <div className="flex items-center gap-3 mb-6">
+            <UsersIcon size={32} className="text-brand-600" />
+            <h1 className="text-3xl font-bold text-gray-900">User Management</h1>
+          </div>
+
+          {/* Tabs */}
+          <div className="flex flex-col md:flex-row gap-3 md:items-center md:justify-between mb-6">
+            <div className="flex gap-2 border-b border-gray-200">
+              <button
+                onClick={() => setActiveTab("platform")}
+                className={`px-4 py-2 font-medium text-sm transition-colors border-b-2 ${
+                  activeTab === "platform"
+                    ? "border-brand-600 text-brand-600"
+                    : "border-transparent text-gray-600 hover:text-gray-900"
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <User size={16} />
+                  Platform Users ({platformUsers.length})
+                </div>
+              </button>
+              <button
+                onClick={() => setActiveTab("org")}
+                className={`px-4 py-2 font-medium text-sm transition-colors border-b-2 ${
+                  activeTab === "org"
+                    ? "border-brand-600 text-brand-600"
+                    : "border-transparent text-gray-600 hover:text-gray-900"
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <Building2 size={16} />
+                  Organization Users ({orgUsers.length})
+                </div>
+              </button>
             </div>
             <div className="w-full md:w-auto flex items-center gap-3 flex-wrap md:flex-nowrap justify-end">
               <div className="relative flex-1 md:flex-none">
@@ -282,13 +321,28 @@ export default function UserManagementPage() {
                   className="pl-9 pr-3 py-2 w-full md:w-80 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-500"
                 />
               </div>
-              <button
-                onClick={() => setShowForm(!showForm)}
-                className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-md font-semibold text-white bg-green-600 hover:bg-green-700 border border-green-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-green-500 w-auto shrink-0 whitespace-nowrap"
-              >
-                <Plus size={18} /> Add User
-              </button>
+              {activeTab === "platform" && (
+                <button
+                  onClick={() => setShowForm(!showForm)}
+                  className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-md font-semibold text-white bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 shadow-md hover:shadow-lg transition-all border border-green-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-green-500 w-auto shrink-0 whitespace-nowrap"
+                >
+                  <Plus size={18} /> Add Platform User
+                </button>
+              )}
             </div>
+          </div>
+
+          {/* Description based on tab */}
+          <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-md">
+            {activeTab === "platform" ? (
+              <p className="text-sm text-blue-800">
+                <strong>Platform Users:</strong> SuperAdmin users who maintain the platform. Created by SuperAdmin only.
+              </p>
+            ) : (
+              <p className="text-sm text-blue-800">
+                <strong>Organization Users:</strong> Users belonging to specific organizations. Created by organization admins independently through the website or by SuperAdmin.
+              </p>
+            )}
           </div>
 
           {/* Add User Form */}
@@ -401,11 +455,15 @@ export default function UserManagementPage() {
             </div>
           )}
 
-          {!error && users.length === 0 ? (
+          {!error && displayUsers.length === 0 ? (
             <div className="p-12 text-center">
               <UsersIcon size={48} className="mx-auto text-gray-400 mb-4" />
-              <p className="text-gray-600 mb-2">No users found</p>
-              <p className="text-sm text-gray-500">Click "Add User" to create your first user</p>
+              <p className="text-gray-600 mb-2">No {activeTab === "platform" ? "platform" : "organization"} users found</p>
+              <p className="text-sm text-gray-500">
+                {activeTab === "platform" 
+                  ? 'Click "Add Platform User" to create a SuperAdmin user'
+                  : 'Organization users are created by org admins or SuperAdmin'}
+              </p>
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -416,21 +474,27 @@ export default function UserManagementPage() {
                     <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">Email</th>
                     <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">Phone</th>
                     <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">Role</th>
-                    <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">Team</th>
+                    {activeTab === "org" && (
+                      <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">Organization</th>
+                    )}
+                    {activeTab === "platform" && (
+                      <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">Team</th>
+                    )}
                     <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">Status</th>
                     <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200">
-                  {(search ? users.filter(u => {
+                  {(search ? displayUsers.filter(u => {
                     const q = search.toLowerCase();
                     return (
                       (u.name || "").toLowerCase().includes(q) ||
                       (u.email || "").toLowerCase().includes(q) ||
                       (u.role || "").toLowerCase().includes(q) ||
-                      (u.team || "").toLowerCase().includes(q)
+                      (u.team || "").toLowerCase().includes(q) ||
+                      (u.org_name || "").toLowerCase().includes(q)
                     );
-                  }) : users).map((user) => (
+                  }) : displayUsers).map((user) => (
                     <tr key={user.user_id} className="hover:bg-gray-50">
                       <td className="px-6 py-4">
                         <p className="font-medium text-gray-900">{user.name || "—"}</p>
@@ -452,16 +516,26 @@ export default function UserManagementPage() {
                           <Shield size={14} />
                           <span className={`font-semibold ${
                             user.role === "SuperAdmin" ? "text-purple-600" :
-                            user.role === "Admin" ? "text-blue-600" :
+                            user.role === "Admin" || user.role === "Owner" ? "text-blue-600" :
                             "text-gray-600"
                           }`}>{user.role}</span>
                         </div>
                       </td>
-                      <td className="px-6 py-4">
-                        <span className="inline-flex px-3 py-1 text-xs font-semibold rounded-full bg-gray-100 text-gray-800">
-                          {user.team || "Unassigned"}
-                        </span>
-                      </td>
+                      {activeTab === "org" && (
+                        <td className="px-6 py-4">
+                          <div className="flex items-center gap-2">
+                            <Building2 size={14} className="text-gray-400" />
+                            <span className="text-gray-700">{user.org_name || "—"}</span>
+                          </div>
+                        </td>
+                      )}
+                      {activeTab === "platform" && (
+                        <td className="px-6 py-4">
+                          <span className="inline-flex px-3 py-1 text-xs font-semibold rounded-full bg-gray-100 text-gray-800">
+                            {user.team || "Unassigned"}
+                          </span>
+                        </td>
+                      )}
                       <td className="px-6 py-4">
                         <span className={`inline-flex items-center gap-1 px-3 py-1 text-xs font-semibold rounded-full ${
                           user.status === "active"
@@ -473,22 +547,29 @@ export default function UserManagementPage() {
                         </span>
                       </td>
                       <td className="px-6 py-4 space-x-2">
-                        <button
-                          onClick={() => openEditModal(user)}
-                          title="Edit"
-                          aria-label="Edit user"
-                          className="inline-flex items-center justify-center p-2 rounded-md bg-blue-100 text-blue-600 hover:bg-blue-200"
-                        >
-                          <Edit2 size={16} />
-                        </button>
-                        <button
-                          onClick={() => handleDeleteUser(user.user_id)}
-                          title="Delete"
-                          aria-label="Delete user"
-                          className="inline-flex items-center justify-center p-2 rounded-md bg-red-100 text-red-600 hover:bg-red-200"
-                        >
-                          <Trash2 size={16} />
-                        </button>
+                        {activeTab === "platform" && (
+                          <>
+                            <button
+                              onClick={() => openEditModal(user)}
+                              title="Edit"
+                              aria-label="Edit user"
+                              className="inline-flex items-center justify-center p-2 rounded-md bg-blue-100 text-blue-600 hover:bg-blue-200"
+                            >
+                              <Edit2 size={16} />
+                            </button>
+                            <button
+                              onClick={() => handleDeleteUser(user.user_id)}
+                              title="Delete"
+                              aria-label="Delete user"
+                              className="inline-flex items-center justify-center p-2 rounded-md bg-red-100 text-red-600 hover:bg-red-200"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          </>
+                        )}
+                        {activeTab === "org" && (
+                          <span className="text-xs text-gray-500">Managed by org</span>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -499,8 +580,23 @@ export default function UserManagementPage() {
         </div>
 
         {/* Total Users */}
-        <div className="mt-6 bg-white rounded-lg border border-gray-200 p-4 text-center">
-          <p className="text-gray-600">Total Users: <strong className="text-lg text-brand-600">{users.length}</strong></p>
+        <div className="mt-6 bg-white rounded-lg border border-gray-200 p-4">
+          <div className="flex justify-around text-center">
+            <div>
+              <p className="text-gray-600 text-sm">Platform Users</p>
+              <p className="text-2xl font-bold text-purple-600">{platformUsers.length}</p>
+            </div>
+            <div className="border-l border-gray-200"></div>
+            <div>
+              <p className="text-gray-600 text-sm">Organization Users</p>
+              <p className="text-2xl font-bold text-blue-600">{orgUsers.length}</p>
+            </div>
+            <div className="border-l border-gray-200"></div>
+            <div>
+              <p className="text-gray-600 text-sm">Total Users</p>
+              <p className="text-2xl font-bold text-brand-600">{users.length}</p>
+            </div>
+          </div>
         </div>
 
         {/* Edit Modal */}

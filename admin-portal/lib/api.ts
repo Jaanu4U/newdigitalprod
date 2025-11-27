@@ -6,7 +6,10 @@ export function apiBase(): string {
   }
   if (typeof window !== "undefined") {
     const h = window.location.hostname;
-    if (h.endsWith("digitalchain.in")) return "https://api.digitalchain.in/v1/";
+    if (h.endsWith("digitalchain.in")) {
+      // Use relative URL so Next.js rewrites work
+      return "/api/";
+    }
   }
-  return "http://localhost:8000/v1/";
+  return "http://localhost:8000/";
 }

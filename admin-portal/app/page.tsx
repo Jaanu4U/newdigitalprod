@@ -15,7 +15,6 @@ type OrgSettings = {
 };
 
 type User = { role: string };
-type Delivery = { status: string };
 
 export default function Dashboard() {
   const [authed, setAuthed] = useState(false);
@@ -25,7 +24,6 @@ export default function Dashboard() {
 
   const [org, setOrg] = useState<OrgSettings | null>(null);
   const [userStats, setUserStats] = useState<{ total: number; admins: number; managers: number; riders: number } | null>(null);
-  const [deliveryStats, setDeliveryStats] = useState<{ total: number; delivered: number; assigned: number; pending: number } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -87,10 +85,9 @@ export default function Dashboard() {
     try {
       // Fetch in parallel
       const h = withTenantHeaders({ headers: { Authorization: `Bearer ${token}` } });
-      const [orgRes, usersRes, delivRes] = await Promise.all([
-        fetch(`${base}org/settings`, h),
-        fetch(`${base}org/users`, h),
-        fetch(`${base}rider/deliveries`, h),
+      const [orgRes, usersRes] = await Promise.all([
+        fetch(`${base}v1/org/settings`, h),
+        fetch(`${base}v1/org/users`, h),
       ]);
       if (!orgRes.ok) throw new Error(`Org HTTP ${orgRes.status}`);
       const orgJson = await orgRes.json();
@@ -105,18 +102,6 @@ export default function Dashboard() {
         setUserStats({ total, admins, managers, riders });
       } else {
         setUserStats(null);
-      }
-
-      if (delivRes.ok) {
-        const d = await delivRes.json();
-        const items: Delivery[] = d.items || [];
-        const total = items.length;
-        const delivered = items.filter(i => (i.status || '').toLowerCase() === 'delivered').length;
-        const assigned = items.filter(i => (i.status || '').toLowerCase() === 'assigned').length;
-        const pending = total - delivered - assigned;
-        setDeliveryStats({ total, delivered, assigned, pending });
-      } else {
-        setDeliveryStats(null);
       }
     } catch (e: any) {
       setError(e.message || 'Failed to load dashboard');
@@ -149,7 +134,7 @@ export default function Dashboard() {
       )}
 
       {authed && (
-        <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
             <div className="text-xs text-gray-500">Organization</div>
             <div className="mt-1 text-lg font-semibold text-gray-900 truncate">{org?.name || '—'}</div>
@@ -166,14 +151,6 @@ export default function Dashboard() {
           </div>
 
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
-            <div className="text-xs text-gray-500">Deliveries</div>
-            <div className="mt-1 text-2xl font-semibold text-gray-900">{deliveryStats?.total ?? '—'}</div>
-            <div className="mt-1 text-sm text-gray-600">Delivered: <span className="font-medium">{deliveryStats?.delivered ?? '—'}</span></div>
-            <div className="mt-1 text-sm text-gray-600">Assigned: <span className="font-medium">{deliveryStats?.assigned ?? '—'}</span></div>
-            <div className="mt-1 text-sm text-gray-600">Pending: <span className="font-medium">{deliveryStats?.pending ?? '—'}</span></div>
-          </div>
-
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
             <div className="text-xs text-gray-500">Region & Timezone</div>
             <div className="mt-1 text-lg font-semibold text-gray-900">{org?.region || '—'}</div>
             <div className="mt-1 text-sm text-gray-600">{org?.timezone || '—'}</div>
@@ -185,9 +162,9 @@ export default function Dashboard() {
         <div className="card p-5">
           <h2 className="text-lg font-semibold mb-2">Quick Links</h2>
           <ul className="list-disc pl-5 text-gray-700 space-y-1">
-            <li><a className="text-brand-700 hover:underline" href="/deliveries">Deliveries</a></li>
+            <li><a className="text-brand-700 hover:underline" href="/orders">Orders</a></li>
             <li><a className="text-brand-700 hover:underline" href="/org-users">Users</a></li>
-            <li><a className="text-brand-700 hover:underline" href="/org-settings">Organization Settings</a></li>
+
             <li><span className="text-gray-500">Reports (coming soon)</span></li>
           </ul>
         </div>
