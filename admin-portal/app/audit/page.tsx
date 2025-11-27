@@ -855,38 +855,21 @@ export default function AuditPage() {
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Order Details</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Customer</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Amount</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="bg-white divide-y divide-gray-200">
                     {paginatedOrders.map((order) => (
                     <tr key={order.invoice_id} className="hover:bg-gray-50">
-                      {/* Order Details Column - Combined */}
+                      {/* Order Details Column */}
                       <td className="px-6 py-4">
                         <div className="space-y-1">
+                          <div className="text-xs text-gray-600">👤 {order.created_by || '—'}</div>
                           <div className="text-sm font-semibold text-gray-900">{order.invoice_no}</div>
-                          <div className="text-xs text-gray-500">ID: {order.invoice_id.slice(0, 8)}...</div>
-                          <div className="text-xs text-gray-600">👤 Created by: {order.created_by || '—'}</div>
                           <div className="text-xs text-gray-600">📅 {formatDateTime(order.created_at)}</div>
                           {order.rider_name && (
-                            <div className="text-xs text-indigo-600">🏍️ Rider: {order.rider_name}</div>
-                          )}
-                          {order.estimated_minutes && (
-                            <div className="text-xs text-gray-600">⏱️ Est: {order.estimated_minutes} min</div>
-                          )}
-                          {order.distance_km && (
-                            <div className="text-xs text-gray-600">📏 Distance: {order.distance_km} km</div>
-                          )}
-                          <div className="mt-1">
-                            <span className={`inline-block px-2 py-0.5 text-xs font-semibold rounded-full ${getStatusBadgeClass(order.status)}`}>
-                              {order.status.replace('_', ' ').toUpperCase()}
-                            </span>
-                          </div>
-                          {order.tracking_number && (
-                            <div className="text-xs text-blue-600">📦 {order.tracking_number}</div>
-                          )}
-                          {order.pod_image_url && (
-                            <div className="text-xs text-green-600 font-semibold">📸 POD Available</div>
+                            <div className="text-xs text-indigo-600">🏍️ {order.rider_name}</div>
                           )}
                         </div>
                       </td>
@@ -906,6 +889,29 @@ export default function AuditPage() {
                         {order.payment_method && (
                           <div className="text-xs text-gray-500 mt-1">💳 {order.payment_method}</div>
                         )}
+                      </td>
+                      
+                      {/* Status Column */}
+                      <td className="px-6 py-4">
+                        <div className="space-y-1">
+                          <div>
+                            <span className={`inline-block px-2 py-0.5 text-xs font-semibold rounded-full ${getStatusBadgeClass(order.status)}`}>
+                              {order.status.replace('_', ' ').toUpperCase()}
+                            </span>
+                          </div>
+                          {order.distance_km && (
+                            <div className="text-xs text-gray-600">📏 {order.distance_km} km</div>
+                          )}
+                          {order.estimated_minutes && (
+                            <div className="text-xs text-gray-600">⏱️ {order.estimated_minutes} min</div>
+                          )}
+                          {order.tracking_number && (
+                            <div className="text-xs text-blue-600">📦 {order.tracking_number}</div>
+                          )}
+                          {order.pod_image_url && (
+                            <div className="text-xs text-green-600 font-semibold">📸 POD</div>
+                          )}
+                        </div>
                       </td>
                       
                       {/* Actions Column */}
