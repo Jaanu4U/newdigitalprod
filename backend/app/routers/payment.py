@@ -169,6 +169,27 @@ def get_org_payment_settings(org: models.Organization) -> Dict[str, Any]:
     return defaults
 
 
+def verify_razorpay_signature(body: bytes, signature: str, secret: str) -> bool:
+    """
+    Verify Razorpay webhook signature for security.
+    Uses HMAC SHA256 to validate the webhook is from Razorpay.
+    """
+    import hmac
+    import hashlib
+    
+    try:
+        expected_signature = hmac.new(
+            secret.encode('utf-8'),
+            body,
+            hashlib.sha256
+        ).hexdigest()
+        
+        return hmac.compare_digest(expected_signature, signature)
+    except Exception as e:
+        print(f"Signature verification failed: {e}")
+        return False
+
+
 def create_razorpay_order(
     amount: float,
     order_id: str,
@@ -218,9 +239,36 @@ def create_razorpay_order(
             "status": razorpay_order["status"]
         }
         
+    except ImportError as e:
+        print(f"Razorpay package not installed: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Payment gateway not configured. Please contact support."
+        )
+    except razorpay.errors.BadRequestError as e:
+        print(f"Razorpay bad request: {e}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid payment request: {str(e)}"
+        )
+    except razorpay.errors.GatewayError as e:
+        print(f"Razorpay gateway error: {e}")
+        raise HTTPException(
+            status_code=502,
+            detail="Payment gateway temporarily unavailable. Please try again."
+        )
+    except razorpay.errors.ServerError as e:
+        print(f"Razorpay server error: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail="Payment service unavailable. Please try again later."
+        )
     except Exception as e:
         print(f"Razorpay order creation failed: {e}")
-        return None
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to create payment order: {str(e)}"
+        )
 
 
 async def send_payment_notification(
@@ -358,21 +406,34 @@ async def generate_payment_qr(
     
     # Try to use Razorpay if enabled
     gateway_order_id = None
+    gateway_error = None
+    
     if gateway_settings.get("enabled") and gateway_settings.get("provider") == "razorpay":
         razorpay_key_id = gateway_settings.get("key_id")
         razorpay_key_secret = gateway_settings.get("key_secret")
         
         if razorpay_key_id and razorpay_key_secret:
-            razorpay_order = create_razorpay_order(
-                amount=request.amount,
-                order_id=order_id,
-                customer_phone=request.customer_phone or delivery.customer_phone or "",
-                key_id=razorpay_key_id,
-                key_secret=razorpay_key_secret
-            )
-            
-            if razorpay_order:
-                gateway_order_id = razorpay_order["gateway_order_id"]
+            try:
+                razorpay_order = create_razorpay_order(
+                    amount=request.amount,
+                    order_id=order_id,
+                    customer_phone=request.customer_phone or delivery.customer_phone or "",
+                    key_id=razorpay_key_id,
+                    key_secret=razorpay_key_secret
+                )
+                
+                if razorpay_order:
+                    gateway_order_id = razorpay_order["gateway_order_id"]
+                    print(f"✅ Razorpay order created: {gateway_order_id}")
+            except HTTPException as e:
+                # Re-raise HTTP exceptions (they have user-friendly messages)
+                raise e
+            except Exception as e:
+                # Log error but continue with manual UPI
+                gateway_error = str(e)
+                print(f"⚠️ Razorpay gateway failed, falling back to manual UPI: {e}")
+        else:
+            print("⚠️ Razorpay enabled but credentials not configured")
     
     # Generate UPI string
     upi_string = create_upi_string(
@@ -781,22 +842,53 @@ async def payment_webhook(
     Webhook endpoint for payment gateway callbacks.
     Provider can be: razorpay, phonepe, cashfree, etc.
     
-    This is a placeholder - implement based on chosen gateway's specs.
+    Implements signature verification for security.
     """
     
     # Get raw body for signature verification
     body = await request.body()
     headers = dict(request.headers)
     
-    # TODO: Implement gateway-specific signature verification
-    # Example for Razorpay:
-    # signature = headers.get('x-razorpay-signature')
-    # verify_signature(body, signature, webhook_secret)
-    
+    # Parse payload first
     try:
-        payload = await request.json()
-    except Exception:
+        payload = json.loads(body.decode('utf-8'))
+    except Exception as e:
+        print(f"Invalid webhook payload: {e}")
         raise HTTPException(status_code=400, detail="Invalid JSON payload")
+    
+    # Razorpay signature verification
+    if provider.lower() == "razorpay":
+        signature = headers.get('x-razorpay-signature')
+        
+        if not signature:
+            print("Missing Razorpay signature header")
+            raise HTTPException(status_code=400, detail="Missing signature")
+        
+        # Get webhook secret from the organization settings
+        # Extract org_id from payload if available
+        gateway_order_id = payload.get("payload", {}).get("payment", {}).get("entity", {}).get("order_id")
+        
+        if gateway_order_id:
+            payment = db.query(models.Payment).filter(
+                models.Payment.gateway_order_id == gateway_order_id
+            ).first()
+            
+            if payment:
+                org = db.query(models.Organization).filter(
+                    models.Organization.org_id == payment.org_id
+                ).first()
+                
+                if org and org.settings:
+                    webhook_secret = org.settings.get("payment", {}).get("gateway", {}).get("webhook_secret")
+                    
+                    if webhook_secret:
+                        # Verify signature
+                        if not verify_razorpay_signature(body, signature, webhook_secret):
+                            print(f"Invalid Razorpay signature for order {gateway_order_id}")
+                            raise HTTPException(status_code=401, detail="Invalid signature")
+                        print(f"✅ Razorpay signature verified for order {gateway_order_id}")
+                    else:
+                        print(f"⚠️ Webhook secret not configured for org {payment.org_id}, skipping verification")
     
     # TODO: Process webhook based on provider
     # This is a basic structure - customize based on gateway
