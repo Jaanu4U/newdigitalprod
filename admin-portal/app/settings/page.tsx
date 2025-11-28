@@ -49,6 +49,7 @@ type PaymentSettings = {
   currency?: string;
   public_key?: string;
   secret_key?: string;
+  webhook_secret?: string;
   upi?: {
     merchant_vpa?: string;
     merchant_name?: string;
@@ -859,6 +860,22 @@ export default function SettingsPage() {
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Secret Key</label>
                   <input type="password" value={pay.secret_key || ""} onChange={(e) => setPay({ ...pay, secret_key: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md" placeholder="sk_..." />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Webhook Secret
+                    <span className="text-xs text-gray-500 ml-2">(Optional - Required for auto payment confirmation)</span>
+                  </label>
+                  <input 
+                    type="password" 
+                    value={pay.webhook_secret || ""} 
+                    onChange={(e) => setPay({ ...pay, webhook_secret: e.target.value })} 
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md" 
+                    placeholder="whsec_..." 
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    Get this from Razorpay Dashboard → Settings → Webhooks. Required for automatic payment confirmation.
+                  </p>
                 </div>
               </div>
               <div className="flex justify-end pt-4 border-t mt-4">

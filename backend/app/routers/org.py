@@ -664,6 +664,36 @@ def update_org_settings(
     merge_section(["providers", "provider_settings"], incoming_providers)
     merge_section(["whatsapp", "whatsapp_settings"], incoming_whatsapp)
 
+    # Transform payment settings to new gateway structure if needed
+    if incoming_payment and "payment" in s:
+        payment = s["payment"]
+        # Check if we're using old flat structure (has public_key/secret_key at root)
+        if payment.get("public_key") or payment.get("secret_key"):
+            # Transform to new structure
+            gateway_settings = {
+                "provider": (payment.get("provider") or "razorpay").lower(),
+                "enabled": True,
+                "key_id": payment.get("public_key", ""),
+                "key_secret": payment.get("secret_key", ""),
+                "webhook_secret": payment.get("webhook_secret")
+            }
+            
+            # Preserve UPI settings
+            upi_settings = payment.get("upi", {})
+            
+            # Create new structure
+            s["payment"] = {
+                "enabled": payment.get("enabled", True),
+                "upi": upi_settings,
+                "gateway": gateway_settings
+            }
+            print(f"[DEBUG] Transformed payment settings to new gateway structure")
+        # If already in new structure but webhook_secret was provided at root, move it
+        elif payment.get("webhook_secret") and "gateway" in payment:
+            if payment["gateway"].get("webhook_secret") != payment["webhook_secret"]:
+                payment["gateway"]["webhook_secret"] = payment["webhook_secret"]
+                print(f"[DEBUG] Updated webhook_secret in gateway structure")
+
     print(f"[DEBUG] Before commit - org.settings = {s}")
     org.settings = s
     flag_modified(org, "settings")  # Tell SQLAlchemy the JSON field changed
