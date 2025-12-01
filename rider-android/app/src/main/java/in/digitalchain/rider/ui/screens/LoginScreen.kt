@@ -1,5 +1,6 @@
 package com.digitalchain.rider.ui.screens
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -21,6 +22,7 @@ import kotlinx.coroutines.launch
 import com.digitalchain.rider.data.Repository
 import com.digitalchain.rider.BuildConfig
 import com.digitalchain.rider.service.LocationTrackingService
+import android.app.Activity
 
 @Composable
 fun LoginScreen(onLoggedIn: () -> Unit) {
@@ -30,6 +32,11 @@ fun LoginScreen(onLoggedIn: () -> Unit) {
     var password by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    
+    // Handle back press to exit app from login screen
+    BackHandler {
+        (context as? Activity)?.finish()
+    }
 
     Box(
         modifier = Modifier
@@ -37,8 +44,8 @@ fun LoginScreen(onLoggedIn: () -> Unit) {
             .background(
                 Brush.verticalGradient(
                     colors = listOf(
-                        Color(0xFF10B981),
-                        Color(0xFF059669)
+                        Color(0xFF0B1220),
+                        Color(0xFF1E3A5F)
                     )
                 )
             )
@@ -64,7 +71,7 @@ fun LoginScreen(onLoggedIn: () -> Unit) {
                         text = "D",
                         fontSize = 48.sp,
                         fontWeight = FontWeight.Bold,
-                        color = Color(0xFF10B981)
+                        color = Color(0xFF4F8EF7)
                     )
                 }
             }
@@ -191,6 +198,9 @@ fun LoginScreen(onLoggedIn: () -> Unit) {
                                     } else {
                                         val exception = result.exceptionOrNull()
                                         error = when {
+                                            exception?.message?.contains("403") == true || 
+                                            exception?.message?.contains("Email not verified") == true -> 
+                                                "Email not verified. Please contact admin"
                                             exception?.message?.contains("401") == true || 
                                             exception?.message?.contains("Invalid credentials") == true -> 
                                                 "Invalid email or password"
@@ -212,7 +222,7 @@ fun LoginScreen(onLoggedIn: () -> Unit) {
                             .fillMaxWidth()
                             .height(56.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFF10B981),
+                            containerColor = Color(0xFF4F8EF7),
                             disabledContainerColor = Color(0xFFD1D5DB)
                         ),
                         shape = RoundedCornerShape(12.dp)

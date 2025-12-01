@@ -68,6 +68,7 @@ class Repository {
             val errorBody = e.response()?.errorBody()?.string()
             val errorMessage = when (e.code()) {
                 401 -> "Invalid credentials"
+                403 -> "Email not verified. Please contact your administrator"
                 400 -> "Invalid request: ${errorBody ?: "Bad request"}"
                 else -> "Server error: ${e.message}"
             }
@@ -108,6 +109,21 @@ class Repository {
             Result.success(allDeliveries)
         } catch (t: Throwable) {
             Result.failure(t)
+        }
+    }
+
+    suspend fun getOrderDetail(invoiceId: String): Result<Map<String, Any>> = withContext(Dispatchers.IO) {
+        return@withContext try {
+            android.util.Log.d("OrderAmount", "Fetching order detail for: $invoiceId")
+            val orderDetail = api.getOrderDetail(invoiceId)
+            android.util.Log.d("OrderAmount", "API Response: $orderDetail")
+            Result.success(orderDetail)
+        } catch (e: retrofit2.HttpException) {
+            android.util.Log.e("OrderAmount", "HTTP Error: ${e.code()} - ${e.message()}")
+            Result.failure(Exception("Failed to fetch order details: ${e.message}"))
+        } catch (t: Throwable) {
+            android.util.Log.e("OrderAmount", "Network Error: ${t.message}", t)
+            Result.failure(Exception("Network error: ${t.message}"))
         }
     }
 
@@ -328,7 +344,8 @@ class Repository {
         riderStatus = rider_status,
         latitude = lat ?: geo?.lat,
         longitude = lng ?: geo?.lng,
-        customerPhone = customer_phone
+        customerPhone = customer_phone,
+        amount = amount
     )
     }
 
@@ -353,7 +370,8 @@ class Repository {
         riderStatus = rider_status,
         latitude = lat,
         longitude = lng,
-        customerPhone = customer_phone
+        customerPhone = customer_phone,
+        amount = amount
     )
     }
 

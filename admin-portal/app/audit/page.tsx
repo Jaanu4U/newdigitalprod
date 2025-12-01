@@ -78,7 +78,7 @@ export default function AuditPage() {
   const [riderFilter, setRiderFilter] = useState<string>('');
   const [shipmentFilter, setShipmentFilter] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const [datePreset, setDatePreset] = useState<string>('today');
+  const [datePreset, setDatePreset] = useState<string>('last30days');
   const [fromDate, setFromDate] = useState<string>('');
   const [toDate, setToDate] = useState<string>('');
   const [activeTab, setActiveTab] = useState<'all' | 'riders' | 'shipping'>('all');
@@ -93,6 +93,8 @@ export default function AuditPage() {
   const [orderTimeline, setOrderTimeline] = useState<any[]>([]);
   const [loadingTimeline, setLoadingTimeline] = useState(false);
   const [riderLocation, setRiderLocation] = useState<{ lat: number; lng: number; timestamp: string } | null>(null);
+  const [locationHistory, setLocationHistory] = useState<Array<{ latitude: number; longitude: number; timestamp: string }>>([]);
+  const [loadingLocations, setLoadingLocations] = useState(false);
   const [podImageUrl, setPodImageUrl] = useState<string | null>(null);
   const [riderLocations, setRiderLocations] = useState<Map<string, { lat: number; lng: number; timestamp: string }>>(new Map());
   const [mapModalOrder, setMapModalOrder] = useState<OrderAudit | null>(null);
@@ -211,9 +213,15 @@ export default function AuditPage() {
     // Handle rider location updates
     if (message.type === 'rider_location_update') {
       const data = message.data;
+      console.log('📍 Received rider_location_update:', JSON.stringify(data, null, 2));
+      console.log('  - Has rider_email?', !!data.rider_email);
+      console.log('  - rider_email value:', data.rider_email);
+      console.log('  - invoice_id:', data.invoice_id);
+      console.log('  - lat/lng:', data.latitude, data.longitude);
       
       // Update rider locations map for the rider performance table
       if (data.rider_email) {
+        console.log('✅ Storing location for rider:', data.rider_email);
         setRiderLocations(prev => {
           const newMap = new Map(prev);
           newMap.set(data.rider_email, {
@@ -221,7 +229,20 @@ export default function AuditPage() {
             lng: data.longitude,
             timestamp: data.timestamp
           });
+          console.log('📊 RiderLocations map now has', newMap.size, 'entries');
           return newMap;
+        });
+      } else {
+        console.log('⚠️ No rider_email in WebSocket payload!');
+      }
+      
+      // Update location if viewing this order's map modal
+      if (mapModalOrder?.invoice_id === data.invoice_id) {
+        console.log('📍 Real-time rider location update for map modal:', data);
+        setRiderLocation({
+          lat: data.latitude,
+          lng: data.longitude,
+          timestamp: data.timestamp
         });
       }
       
@@ -243,7 +264,14 @@ export default function AuditPage() {
   useEffect(() => {
     // Set date range based on preset
     const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    
+    // Helper to get local date string in YYYY-MM-DD format
+    const getLocalDateString = (date: Date) => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
     
     if (datePreset === 'custom') {
       setShowCustomDateInputs(true);
@@ -254,39 +282,51 @@ export default function AuditPage() {
     
     switch (datePreset) {
       case 'today':
-        setFromDate(today.toISOString().split('T')[0]);
-        setToDate(today.toISOString().split('T')[0]);
+        const todayStr = getLocalDateString(today);
+        setFromDate(todayStr);
+        setToDate(todayStr);
         break;
       case 'yesterday':
         const yesterday = new Date(today);
         yesterday.setDate(yesterday.getDate() - 1);
-        setFromDate(yesterday.toISOString().split('T')[0]);
-        setToDate(yesterday.toISOString().split('T')[0]);
+        const yesterdayStr = getLocalDateString(yesterday);
+        setFromDate(yesterdayStr);
+        setToDate(yesterdayStr);
         break;
       case 'this_week':
         const startOfWeek = new Date(today);
         startOfWeek.setDate(today.getDate() - today.getDay());
-        setFromDate(startOfWeek.toISOString().split('T')[0]);
-        setToDate(today.toISOString().split('T')[0]);
+        setFromDate(getLocalDateString(startOfWeek));
+        setToDate(getLocalDateString(today));
         break;
       case 'last_week':
         const lastWeekEnd = new Date(today);
         lastWeekEnd.setDate(today.getDate() - today.getDay() - 1);
         const lastWeekStart = new Date(lastWeekEnd);
         lastWeekStart.setDate(lastWeekEnd.getDate() - 6);
-        setFromDate(lastWeekStart.toISOString().split('T')[0]);
-        setToDate(lastWeekEnd.toISOString().split('T')[0]);
+        setFromDate(getLocalDateString(lastWeekStart));
+        setToDate(getLocalDateString(lastWeekEnd));
         break;
       case 'this_month':
         const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
-        setFromDate(startOfMonth.toISOString().split('T')[0]);
-        setToDate(today.toISOString().split('T')[0]);
+        setFromDate(getLocalDateString(startOfMonth));
+        setToDate(getLocalDateString(today));
         break;
       case 'last_month':
         const lastMonthStart = new Date(today.getFullYear(), today.getMonth() - 1, 1);
         const lastMonthEnd = new Date(today.getFullYear(), today.getMonth(), 0);
-        setFromDate(lastMonthStart.toISOString().split('T')[0]);
-        setToDate(lastMonthEnd.toISOString().split('T')[0]);
+        setFromDate(getLocalDateString(lastMonthStart));
+        setToDate(getLocalDateString(lastMonthEnd));
+        break;
+      case 'last30days':
+        const last30Start = new Date(today);
+        last30Start.setDate(today.getDate() - 30);
+        setFromDate(getLocalDateString(last30Start));
+        setToDate(getLocalDateString(today));
+        break;
+      case 'all':
+        setFromDate('');
+        setToDate('');
         break;
       default:
         break;
@@ -458,11 +498,57 @@ export default function AuditPage() {
     }
   };
 
+  const fetchLocationHistory = async (invoiceId: string) => {
+    console.log('🔍 fetchLocationHistory called for:', invoiceId);
+    setLoadingLocations(true);
+    try {
+      const token = localStorage.getItem('dc_access');
+      const url = `${base}v1/admin/orders/audit/${invoiceId}/locations`;
+      console.log('📡 Fetching from URL:', url);
+      
+      const response = await fetch(
+        url,
+        withTenantHeaders({
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        })
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        console.log(`📍 Loaded ${data.total_locations} location points for ${invoiceId}`);
+        console.log('Location data:', data.locations);
+        setLocationHistory(data.locations || []);
+        
+        // Set the latest location as current rider location if available
+        if (data.locations && data.locations.length > 0) {
+          const latest = data.locations[data.locations.length - 1];
+          const riderLoc = {
+            lat: latest.latitude,
+            lng: latest.longitude,
+            timestamp: latest.timestamp
+          };
+          console.log('✅ Setting rider location from history:', riderLoc);
+          setRiderLocation(riderLoc);
+        } else {
+          console.log('⚠️ No location history found - keeping real-time location if available');
+          // Don't clear rider location - it might have been set from real-time WebSocket
+        }
+      }
+    } catch (err) {
+      console.error('Failed to fetch location history:', err);
+    } finally {
+      setLoadingLocations(false);
+    }
+  };
+
   const handleViewDetails = (order: OrderAudit) => {
     console.log('📋 Viewing order details:', order.invoice_no);
     console.log('🖼️ POD URL:', order.pod_image_url);
     setSelectedOrder(order);
     fetchOrderTimeline(order.invoice_id);
+    fetchLocationHistory(order.invoice_id);
   };
 
   const formatDateTime = (dateStr: string | null) => {
@@ -715,12 +801,14 @@ export default function AuditPage() {
               onChange={(e) => setDatePreset(e.target.value)}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
             >
+              <option value="all">All Time</option>
               <option value="today">Today</option>
               <option value="yesterday">Yesterday</option>
               <option value="this_week">This Week</option>
               <option value="last_week">Last Week</option>
               <option value="this_month">This Month</option>
               <option value="last_month">Last Month</option>
+              <option value="last30days">Last 30 Days</option>
               <option value="custom">Custom Date Range</option>
             </select>
           </div>
@@ -926,7 +1014,28 @@ export default function AuditPage() {
                           </button>
                           {(order.pickup_location || order.delivery_location) && (
                             <button
-                              onClick={() => setMapModalOrder(order)}
+                              onClick={() => {
+                                console.log('🗺️ Opening map for order:', order.invoice_id, order.invoice_no);
+                                setMapModalOrder(order);
+                                
+                                // Check if rider has a current location in our map
+                                if (order.rider_email && riderLocations.has(order.rider_email)) {
+                                  const riderLoc = riderLocations.get(order.rider_email);
+                                  console.log('✅ Setting rider location from real-time map:', riderLoc);
+                                  setRiderLocation(riderLoc || null);
+                                } else {
+                                  console.log('⚠️ No real-time rider location available yet');
+                                  setRiderLocation(null);
+                                }
+                                
+                                // Fetch latest location history for this order
+                                if (order.status === 'in_transit' || order.status === 'delivered') {
+                                  console.log('📡 Fetching location history for:', order.invoice_id);
+                                  fetchLocationHistory(order.invoice_id);
+                                } else {
+                                  console.log('⚠️ Order not in transit/delivered, skipping location fetch');
+                                }
+                              }}
                               className="p-2 text-green-600 hover:bg-green-50 rounded-lg transition-colors"
                               title="View Map"
                             >
@@ -1227,6 +1336,65 @@ export default function AuditPage() {
                                   
                                   {event.details && Object.keys(event.details).length > 0 && (
                                     <div className="mt-3 pt-3 border-t border-gray-100">
+                                      {/* Special formatting for payment events */}
+                                      {event.event === 'Payment QR Generated' && (
+                                        <div className="flex flex-wrap gap-2">
+                                          {event.details.amount !== undefined && (
+                                            <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs bg-orange-100 text-orange-800 font-medium">
+                                              ₹ {Number(event.details.amount).toFixed(2)}
+                                            </span>
+                                          )}
+                                          {event.details.order_id && (
+                                            <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs bg-gray-100 text-gray-800 font-mono">
+                                              Order: {String(event.details.order_id)}
+                                            </span>
+                                          )}
+                                          {event.details.payment_id && (
+                                            <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs bg-blue-100 text-blue-800 font-mono">
+                                              PID: {String(event.details.payment_id)}
+                                            </span>
+                                          )}
+                                          {event.details.gateway_order_id && (
+                                            <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs bg-indigo-100 text-indigo-800 font-mono">
+                                              Razorpay OID: {String(event.details.gateway_order_id)}
+                                            </span>
+                                          )}
+                                          {event.details.expires_at && (
+                                            <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs bg-red-100 text-red-800">
+                                              Expires: {formatDateTime(event.details.expires_at)}
+                                            </span>
+                                          )}
+                                        </div>
+                                      )}
+                                      {event.event === 'Payment Confirmed' && (
+                                        <div className="flex flex-wrap gap-2">
+                                          {event.details.amount !== undefined && (
+                                            <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs bg-green-100 text-green-800 font-medium">
+                                              ₹ {Number(event.details.amount).toFixed(2)}
+                                            </span>
+                                          )}
+                                          {event.details.payment_method && (
+                                            <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs bg-green-50 text-green-700">
+                                              Method: {String(event.details.payment_method)}
+                                            </span>
+                                          )}
+                                          {event.details.upi_transaction_id && (
+                                            <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs bg-gray-100 text-gray-800 font-mono">
+                                              UTR: {String(event.details.upi_transaction_id)}
+                                            </span>
+                                          )}
+                                          {event.details.gateway_payment_id && (
+                                            <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs bg-indigo-100 text-indigo-800 font-mono">
+                                              Razorpay PID: {String(event.details.gateway_payment_id)}
+                                            </span>
+                                          )}
+                                          {event.details.gateway_order_id && (
+                                            <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs bg-indigo-50 text-indigo-700 font-mono">
+                                              OID: {String(event.details.gateway_order_id)}
+                                            </span>
+                                          )}
+                                        </div>
+                                      )}
                                       <div className="space-y-2">
                                         {Object.entries(event.details).map(([key, value]) => {
                                           // Format specific fields nicely
@@ -1252,6 +1420,13 @@ export default function AuditPage() {
                                                 </a>
                                               </div>
                                             );
+                                          }
+                                          // Skip duplicates already shown above for payment events
+                                          if (event.event === 'Payment QR Generated' && ['amount','order_id','payment_id','gateway_order_id','expires_at'].includes(key)) {
+                                            return null;
+                                          }
+                                          if (event.event === 'Payment Confirmed' && ['amount','payment_method','upi_transaction_id','gateway_payment_id','gateway_order_id'].includes(key)) {
+                                            return null;
                                           }
                                           if (key === 'payment') {
                                             const payment = value as any;
@@ -1300,6 +1475,110 @@ export default function AuditPage() {
                     </div>
                   )}
                 </div>
+
+                {/* Location History Section */}
+                <div className="mt-8">
+                  <h4 className="text-sm font-semibold text-gray-700 mb-4">
+                    📍 Location History 
+                    {locationHistory.length > 0 && (
+                      <span className="ml-2 text-xs font-normal text-gray-500">
+                        ({locationHistory.length} tracking points)
+                      </span>
+                    )}
+                  </h4>
+                  {loadingLocations ? (
+                    <div className="text-center py-8">
+                      <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+                      <p className="text-sm text-gray-500 mt-2">Loading location history...</p>
+                    </div>
+                  ) : locationHistory.length > 0 ? (
+                    <div className="space-y-3">
+                      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+                        <div className="flex items-center gap-2 mb-2">
+                          <span className="text-2xl">📌</span>
+                          <div>
+                            <p className="text-sm font-semibold text-blue-900">Current/Last Location</p>
+                            <p className="text-xs text-blue-700">
+                              {locationHistory[locationHistory.length - 1].latitude.toFixed(6)}, {locationHistory[locationHistory.length - 1].longitude.toFixed(6)}
+                            </p>
+                            <p className="text-xs text-blue-600 mt-1">
+                              {formatDateTime(locationHistory[locationHistory.length - 1].timestamp)}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="max-h-64 overflow-y-auto border border-gray-200 rounded-lg">
+                        <table className="min-w-full divide-y divide-gray-200">
+                          <thead className="bg-gray-50 sticky top-0">
+                            <tr>
+                              <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">#</th>
+                              <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Latitude</th>
+                              <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Longitude</th>
+                              <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Timestamp</th>
+                              <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody className="bg-white divide-y divide-gray-200">
+                            {locationHistory.map((loc, index) => (
+                              <tr key={index} className="hover:bg-gray-50">
+                                <td className="px-4 py-2 text-xs text-gray-600">{index + 1}</td>
+                                <td className="px-4 py-2 text-xs font-mono text-gray-700">{loc.latitude.toFixed(6)}</td>
+                                <td className="px-4 py-2 text-xs font-mono text-gray-700">{loc.longitude.toFixed(6)}</td>
+                                <td className="px-4 py-2 text-xs text-gray-600">{formatDateTime(loc.timestamp)}</td>
+                                <td className="px-4 py-2">
+                                  <a
+                                    href={`https://www.google.com/maps?q=${loc.latitude},${loc.longitude}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-xs text-blue-600 hover:text-blue-800 underline"
+                                  >
+                                    View on Map
+                                  </a>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      <div className="flex gap-2 mt-4">
+                        <a
+                          href={`https://www.google.com/maps/dir/${locationHistory.map(l => `${l.latitude},${l.longitude}`).join('/')}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition-colors"
+                        >
+                          🗺️ View Full Route on Google Maps
+                        </a>
+                        <button
+                          onClick={() => {
+                            const csv = [
+                              'Index,Latitude,Longitude,Timestamp',
+                              ...locationHistory.map((loc, i) => 
+                                `${i + 1},${loc.latitude},${loc.longitude},${loc.timestamp}`
+                              )
+                            ].join('\n');
+                            const blob = new Blob([csv], { type: 'text/csv' });
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = `location-history-${selectedOrder.invoice_no}.csv`;
+                            a.click();
+                            URL.revokeObjectURL(url);
+                          }}
+                          className="inline-flex items-center px-4 py-2 bg-green-600 text-white text-sm rounded-lg hover:bg-green-700 transition-colors"
+                        >
+                          📥 Download CSV
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-center py-8 bg-gray-50 rounded-lg border-2 border-dashed border-gray-300">
+                      <p className="text-sm text-gray-500">No location tracking data available for this order</p>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           </div>
@@ -1307,7 +1586,10 @@ export default function AuditPage() {
 
         {/* Map Modal Popup */}
         {mapModalOrder && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50" onClick={() => setMapModalOrder(null)}>
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50" onClick={() => {
+            setMapModalOrder(null);
+            setRiderLocation(null);
+          }}>
             <div className="bg-white rounded-lg max-w-5xl w-full max-h-[90vh] overflow-hidden" onClick={(e) => e.stopPropagation()}>
               <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center bg-gradient-to-r from-blue-50 to-indigo-50">
                 <div>
@@ -1320,7 +1602,10 @@ export default function AuditPage() {
                   </p>
                 </div>
                 <button
-                  onClick={() => setMapModalOrder(null)}
+                  onClick={() => {
+                    setMapModalOrder(null);
+                    setRiderLocation(null);
+                  }}
                   className="text-gray-400 hover:text-gray-600 text-2xl font-bold leading-none"
                 >
                   ×
@@ -1332,7 +1617,7 @@ export default function AuditPage() {
                   <OrderTrackingMap
                     pickupLocation={mapModalOrder.pickup_location}
                     deliveryLocation={mapModalOrder.delivery_location}
-                    riderLocation={riderLocations.get(mapModalOrder.invoice_id) || null}
+                    riderLocation={riderLocation}
                     status={mapModalOrder.status}
                   />
                 </div>

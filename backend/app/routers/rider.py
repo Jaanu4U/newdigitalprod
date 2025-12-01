@@ -28,10 +28,11 @@ def list_deliveries(
         models.SyncLog.type == 'invoice_draft',
     ).all()
     
-    # Build invoice_id -> invoice_no map and coordinates map
+    # Build invoice_id -> invoice_no map, coordinates map, and amount map
     invoice_map = {}
     customer_id_map = {}
     coordinates_map = {}
+    amount_map = {}
     for entry in sync_entries:
         try:
             data = json.loads(entry.payload or '{}')
@@ -44,6 +45,16 @@ def list_deliveries(
                 delivery_lng = data.get('delivery_longitude')
                 if delivery_lat and delivery_lng:
                     coordinates_map[inv_id] = (str(delivery_lat), str(delivery_lng))
+                # Get invoice amount from totals
+                totals = data.get('totals', {})
+                if isinstance(totals, dict):
+                    # Try to get total from various possible fields
+                    total_amount = totals.get('total') or totals.get('grandTotal') or totals.get('grand_total')
+                    if total_amount:
+                        try:
+                            amount_map[inv_id] = float(total_amount)
+                        except (ValueError, TypeError):
+                            pass
         except:
             continue
     
@@ -94,7 +105,8 @@ def list_deliveries(
             rider_status=r.rider_status or "assigned",
             customer_phone=customer_phone,
             latitude=lat,
-            longitude=lng
+            longitude=lng,
+            amount=amount_map.get(r.order_id)
         ))
     return {"items": items}
 

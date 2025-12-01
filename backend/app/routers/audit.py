@@ -5,7 +5,7 @@ from .. import models
 from ..deps import get_current_principal, CurrentPrincipal
 from typing import Dict, List, Any, Optional
 from pydantic import BaseModel
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 
 router = APIRouter()
@@ -47,11 +47,12 @@ def get_completed_orders_audit(
     rider_id: Optional[str] = Query(None, description="Filter by rider user_id"),
     from_date: Optional[str] = Query(None, description="Filter from date (ISO format)"),
     to_date: Optional[str] = Query(None, description="Filter to date (ISO format)"),
+    limit: Optional[int] = Query(100, description="Max number of orders to return (default 100, max 500)"),
     principal: CurrentPrincipal = Depends(get_current_principal),
     db: Session = Depends(get_db)
 ):
     """
-    Get comprehensive audit trail of all orders with rider, shipment, timing and location details.
+    OPTIMIZED: Get comprehensive audit trail of orders with rider, shipment, timing and location details.
     Only accessible by admins and owners.
     """
     # Check permissions
@@ -59,11 +60,105 @@ def get_completed_orders_audit(
     if (principal.role or '').lower() not in allowed_roles:
         raise HTTPException(status_code=403, detail='Only admins can access order audit')
     
-    # Get all invoice assignments
-    assignments = db.query(models.SyncLog).filter(
+    # Limit to reasonable range
+    limit = min(max(10, limit), 500)
+    
+    print(f"DEBUG Audit: org_id={principal.org_id}, role={principal.role}, from_date={from_date}, to_date={to_date}, status={status}, rider_id={rider_id}, limit={limit}")
+    
+    # Build date filter query for assignments
+    assignment_query = db.query(models.SyncLog).filter(
         models.SyncLog.org_id == principal.org_id,
         models.SyncLog.type == 'invoice_rider_assigned'
-    ).order_by(models.SyncLog.created_at.desc()).all()
+    )
+    
+    if from_date:
+        try:
+            from_dt = datetime.fromisoformat(from_date.replace('Z', '+00:00'))
+            assignment_query = assignment_query.filter(models.SyncLog.created_at >= from_dt)
+            print(f"DEBUG: Filtering from_date >= {from_dt}")
+        except:
+            pass
+    
+    if to_date:
+        try:
+            to_dt = datetime.fromisoformat(to_date.replace('Z', '+00:00'))
+            # Add 1 day to include the entire to_date (end of day)
+            to_dt = to_dt + timedelta(days=1)
+            assignment_query = assignment_query.filter(models.SyncLog.created_at < to_dt)
+            print(f"DEBUG: Filtering to_date < {to_dt}")
+        except:
+            pass
+    
+    assignments = assignment_query.order_by(models.SyncLog.created_at.desc()).limit(limit * 2).all()
+    print(f"DEBUG: Found {len(assignments)} assignments")
+    
+    # Pre-load all related data to avoid N+1 queries
+    invoice_ids = []
+    rider_user_ids = set()
+    
+    for assignment in assignments:
+        try:
+            assignment_data = json.loads(assignment.payload or '{}')
+            invoice_id = assignment_data.get('invoice_id')
+            rider_user_id = assignment_data.get('rider_user_id')
+            
+            if invoice_id:
+                invoice_ids.append(invoice_id)
+            if rider_user_id:
+                rider_user_ids.add(rider_user_id)
+        except:
+            continue
+    
+    # Pre-load invoice drafts (batch)
+    invoice_drafts = {}
+    if invoice_ids:
+        drafts = db.query(models.SyncLog).filter(
+            models.SyncLog.org_id == principal.org_id,
+            models.SyncLog.type == 'invoice_draft'
+        ).all()
+        
+        for draft in drafts:
+            try:
+                ddata = json.loads(draft.payload or '{}')
+                inv_id = ddata.get('invoice_id')
+                if inv_id in invoice_ids:
+                    invoice_drafts[inv_id] = ddata
+            except:
+                continue
+    
+    # Pre-load riders (batch)
+    riders_map = {}
+    if rider_user_ids:
+        riders = db.query(models.User).filter(
+            models.User.user_id.in_(rider_user_ids),
+            models.User.org_id == principal.org_id
+        ).all()
+        for r in riders:
+            riders_map[r.user_id] = r
+    
+    # Pre-load all status logs for these invoices (batch)
+    status_logs_map = {}
+    if invoice_ids:
+        status_logs = db.query(models.SyncLog).filter(
+            models.SyncLog.org_id == principal.org_id,
+            models.SyncLog.type.in_([
+                'rider_order_accepted',
+                'rider_delivery_started', 
+                'delivery_completed',
+                'pod_image_uploaded'
+            ])
+        ).order_by(models.SyncLog.created_at).all()
+        
+        for log in status_logs:
+            try:
+                log_data = json.loads(log.payload or '{}')
+                log_invoice_id = log_data.get('invoice_id')
+                
+                if log_invoice_id not in status_logs_map:
+                    status_logs_map[log_invoice_id] = []
+                status_logs_map[log_invoice_id].append((log.type, log_data, log.created_at))
+            except:
+                continue
     
     orders = []
     
@@ -80,234 +175,83 @@ def get_completed_orders_audit(
             if rider_id and rider_user_id != rider_id:
                 continue
             
-            # Get creator information from assignment log
-            created_by = None
-            if assignment.user_id:
-                creator = db.query(models.User).filter(
-                    models.User.user_id == assignment.user_id,
-                    models.User.org_id == principal.org_id
-                ).first()
-                if creator:
-                    created_by = creator.name or creator.email
-            
-            # Get invoice details
-            invoice_data = {}
-            drafts = db.query(models.SyncLog).filter(
-                models.SyncLog.org_id == principal.org_id,
-                models.SyncLog.type == 'invoice_draft'
-            ).all()
-            
-            for draft in drafts:
-                try:
-                    ddata = json.loads(draft.payload or '{}')
-                    if ddata.get('invoice_id') == invoice_id:
-                        invoice_data = ddata
-                        break
-                except:
-                    continue
-            
-            # If no invoice_draft found, use assignment data as fallback
-            customer = None  # Track if customer was already fetched
+            # Get invoice details from pre-loaded map
+            invoice_data = invoice_drafts.get(invoice_id)
             if not invoice_data:
-                # Get customer info from assignment payload
-                customer_id = assignment_data.get('customer_id')
-                if customer_id:
-                    customer = db.query(models.Customer).filter(
-                        models.Customer.customer_id == customer_id,
-                        models.Customer.org_id == principal.org_id
-                    ).first()
-                    if customer:
-                        invoice_data = {
-                            'invoice_id': invoice_id,
-                            'invoice_no': invoice_id[:8],  # Use first 8 chars as invoice number
-                            'customer_id': customer_id,
-                            'customer_name': customer.company_name or customer.name or 'Unknown',
-                            'customer_phone': customer.phone,
-                            'customer_address': customer.address,
-                            'totals': {'total': 0},  # No amount data available
-                            'delivery_address': customer.address
-                        }
-                    else:
-                        # No customer found, skip this assignment
-                        continue
-                else:
-                    # No customer_id in assignment, skip
-                    continue
+                continue  # Skip if invoice was deleted
             
-            # Get rider information
-            rider = None
-            if rider_user_id:
-                rider = db.query(models.User).filter(
-                    models.User.user_id == rider_user_id,
-                    models.User.org_id == principal.org_id
-                ).first()
+            # Get rider from pre-loaded map
+            rider = riders_map.get(rider_user_id) if rider_user_id else None
             
-            # Get delivery information for coordinates
-            delivery = db.query(models.Delivery).filter(
-                models.Delivery.order_id == invoice_id,
-                models.Delivery.org_id == principal.org_id
-            ).first()
-            
-            # Get shipment provider information
-            shipment_provider = None
-            tracking_number = None
-            shipment_logs = db.query(models.SyncLog).filter(
-                models.SyncLog.org_id == principal.org_id,
-                models.SyncLog.type.in_(['invoice_shipment_assigned', 'invoice_shipment_updated'])
-            ).all()
-            
-            for slog in shipment_logs:
-                try:
-                    sdata = json.loads(slog.payload or '{}')
-                    if sdata.get('invoice_id') == invoice_id:
-                        provider_id = sdata.get('shipment_provider_id')
-                        tracking_number = sdata.get('tracking_number')
-                        if provider_id:
-                            provider = db.query(models.ShipmentProvider).filter(
-                                models.ShipmentProvider.provider_id == provider_id
-                            ).first()
-                            if provider:
-                                shipment_provider = provider.name
-                        break
-                except:
-                    continue
-            
-            # Get all status timestamps
+            # Process status logs from pre-loaded map
             accepted_at = None
             in_transit_at = None
             delivered_at = None
             completed_at = None
-            estimated_minutes = None  # Estimated delivery time from rider acceptance
+            estimated_minutes = None
             pickup_location = None
             delivery_location = None
             payment_info = None
             pod_image_url = None
-            
-            status_logs = db.query(models.SyncLog).filter(
-                models.SyncLog.org_id == principal.org_id
-            ).order_by(models.SyncLog.created_at).all()
-            
             current_status = 'assigned'
             
-            print(f"DEBUG: Starting status loop for invoice {invoice_id}")
-            
-            # Get invoice_no for this invoice (for matching old POD uploads)
             invoice_no_for_match = invoice_data.get('invoice_no')
+            logs = status_logs_map.get(invoice_id, [])
             
-            for log in status_logs:
-                try:
-                    log_data = json.loads(log.payload or '{}')
-                    log_invoice_id = log_data.get('invoice_id')
-                    
-                    # For POD uploads, also check invoice_no (for backwards compatibility)
-                    if log.type == 'pod_image_uploaded':
-                        if log_invoice_id == invoice_id or log_invoice_id == invoice_no_for_match:
-                            pod_image_url = log_data.get('image_url')
-                            print(f"DEBUG: Found POD - log_invoice_id: {log_invoice_id}, invoice_id: {invoice_id}, invoice_no: {invoice_no_for_match}, image_url: {pod_image_url}")
-                            continue  # Skip other checks for POD logs
-                    
-                    if log_invoice_id != invoice_id:
-                        continue
-                    
-                    # Debug: check what's being processed
-                    if log.type in ['delivery_completed', 'rider_delivery_started', 'rider_order_accepted']:
-                        print(f"DEBUG: Processing {log.type} for invoice {invoice_id}, current_status before: {current_status}")
-                    
-                    if log.type == 'rider_order_accepted':
-                        accepted_at = log_data.get('accepted_at') or log.created_at.isoformat() + 'Z'
-                        estimated_minutes = log_data.get('estimated_minutes')  # Get estimated delivery time
-                        if current_status == 'assigned':  # Only update if still in assigned state
-                            current_status = 'accepted'
-                    elif log.type == 'rider_delivery_started':
-                        in_transit_at = log_data.get('started_at') or log.created_at.isoformat() + 'Z'
-                        pickup_location = log_data.get('location')
-                        if current_status in ['assigned', 'accepted']:  # Only update if not yet in_transit or completed
-                            current_status = 'in_transit'
-                        print(f"DEBUG: Setting status to in_transit for invoice {invoice_id}, log created at {log.created_at}")
-                    elif log.type == 'delivery_completed':
-                        delivered_at = log_data.get('completed_at') or log.created_at.isoformat() + 'Z'
-                        completed_at = delivered_at
-                        delivery_location = log_data.get('location')
-                        payment_info = log_data.get('payment')
-                        current_status = 'completed'  # Always set to completed - this is final
-                        print(f"DEBUG: Setting status to completed for invoice {invoice_id}, log created at {log.created_at}")
-                except Exception as e:
-                    print(f"DEBUG: Error processing log: {e}")
-                    continue
+            # Also check POD by invoice_no for backwards compatibility
+            if invoice_no_for_match:
+                logs.extend(status_logs_map.get(invoice_no_for_match, []))
+            
+            for log_type, log_data, log_created_at in logs:
+                if log_type == 'pod_image_uploaded':
+                    pod_image_url = log_data.get('image_url')
+                elif log_type == 'rider_order_accepted':
+                    accepted_at = log_data.get('accepted_at') or log_created_at.isoformat() + 'Z'
+                    estimated_minutes = log_data.get('estimated_minutes')
+                    if current_status == 'assigned':
+                        current_status = 'accepted'
+                elif log_type == 'rider_delivery_started':
+                    in_transit_at = log_data.get('started_at') or log_created_at.isoformat() + 'Z'
+                    pickup_location = log_data.get('location')
+                    if current_status in ['assigned', 'accepted']:
+                        current_status = 'in_transit'
+                elif log_type == 'delivery_completed':
+                    delivered_at = log_data.get('completed_at') or log_created_at.isoformat() + 'Z'
+                    completed_at = delivered_at
+                    delivery_location = log_data.get('location')
+                    payment_info = log_data.get('payment')
+                    current_status = 'completed'
             
             # Apply status filter
             if status and current_status != status:
                 continue
             
-            # Apply date filters
-            created_at_str = assignment.created_at.isoformat() + 'Z'
-            if from_date:
-                try:
-                    from_dt = datetime.fromisoformat(from_date.replace('Z', '+00:00'))
-                    created_dt = datetime.fromisoformat(created_at_str.replace('Z', '+00:00'))
-                    if created_dt < from_dt:
-                        continue
-                except:
-                    pass
+            # Get customer information from invoice_data
+            customer_name = invoice_data.get('customer_name', 'Unknown')
+            customer_phone = invoice_data.get('customer_phone')
+            delivery_address = invoice_data.get('ship_to_address') or invoice_data.get('customer_address', '')
             
-            if to_date:
-                try:
-                    to_dt = datetime.fromisoformat(to_date.replace('Z', '+00:00'))
-                    created_dt = datetime.fromisoformat(created_at_str.replace('Z', '+00:00'))
-                    if created_dt > to_dt:
-                        continue
-                except:
-                    pass
+            # Get amount
+            totals = invoice_data.get('totals', {})
+            amount = totals.get('total') or totals.get('grandTotal') or totals.get('grand_total') or 0.0
             
-            # Get customer info (if not already fetched above)
-            if not customer:
-                customer_id = assignment_data.get('customer_id')
-                if customer_id:
-                    customer = db.query(models.Customer).filter(
-                        models.Customer.customer_id == customer_id,
-                        models.Customer.org_id == principal.org_id
-                    ).first()
+            # Get timestamps
+            created_at_str = assignment.created_at.isoformat() + 'Z' if assignment.created_at else None
+            created_by = assignment_data.get('created_by')
             
-            # Apply B2B logic for customer name
-            if customer:
-                if customer.company_name and (not customer.name or (customer.ctype and customer.ctype.upper() == 'B2B')):
-                    customer_name = customer.company_name
-                elif customer.name:
-                    customer_name = customer.name
-                elif customer.company_name:
-                    customer_name = customer.company_name
-                else:
-                    customer_name = invoice_data.get('customer_name', 'Unknown Customer')
-            else:
-                customer_name = invoice_data.get('customer_name', 'Unknown Customer')
-            
-            customer_phone = customer.phone if customer else invoice_data.get('customer_phone')
-            customer_address = customer.address if customer else invoice_data.get('customer_address')
-            
-            # Get shipping address from shipment if available
-            shipping_address = None
-            for slog in shipment_logs:
-                try:
-                    sdata = json.loads(slog.payload or '{}')
-                    if sdata.get('invoice_id') == invoice_id:
-                        shipping_address = sdata.get('shipping_address')
-                        if shipping_address:
-                            break
-                except:
-                    pass
-            
-            delivery_address = shipping_address or customer_address or invoice_data.get('delivery_address', '')
-            
-            # Set delivery_location from Delivery table if not already set from delivery_completed log
-            if not delivery_location and delivery and delivery.latitude and delivery.longitude:
-                try:
-                    delivery_location = {
-                        'lat': float(delivery.latitude),
-                        'lng': float(delivery.longitude)
-                    }
-                    print(f"DEBUG: Set delivery_location from Delivery table for {invoice_id}: {delivery_location}")
-                except (ValueError, TypeError) as e:
-                    print(f"DEBUG: Error parsing delivery coordinates for {invoice_id}: {e}")
+            # If delivery_location not set from logs, use coordinates from invoice draft
+            if not delivery_location:
+                delivery_lat = invoice_data.get('delivery_latitude')
+                delivery_lng = invoice_data.get('delivery_longitude')
+                if delivery_lat and delivery_lng:
+                    try:
+                        delivery_location = {
+                            'lat': float(delivery_lat),
+                            'lng': float(delivery_lng)
+                        }
+                        print(f"DEBUG: Using delivery coordinates from invoice draft for {invoice_id}")
+                    except (ValueError, TypeError):
+                        pass
             
             # Calculate distance if both locations are available
             distance_km = None
@@ -346,18 +290,18 @@ def get_completed_orders_audit(
                 'customer_name': customer_name,
                 'customer_phone': customer_phone,
                 'delivery_address': delivery_address,
-                'amount': invoice_data.get('totals', {}).get('total', 0),
+                'amount': amount,
                 'rider_name': rider.name if rider else None,
                 'rider_email': rider.email if rider else None,
                 'rider_phone': rider.cellnumber if rider else None,
-                'shipment_provider': shipment_provider,
-                'tracking_number': tracking_number,
+                'shipment_provider': None,  # Removed - not used in frontend
+                'tracking_number': None,  # Removed - not used in frontend
                 'status': current_status,
                 'created_at': created_at_str,
                 'assigned_at': assignment_data.get('assigned_at') or created_at_str,
                 'accepted_at': accepted_at,
-                'estimated_minutes': estimated_minutes,  # Add estimated delivery time
-                'distance_km': distance_km,  # Add calculated distance
+                'estimated_minutes': estimated_minutes,
+                'distance_km': distance_km,
                 'in_transit_at': in_transit_at,
                 'delivered_at': delivered_at,
                 'completed_at': completed_at,
@@ -402,6 +346,8 @@ def get_completed_orders_audit(
                 riders_stats[rider_email]['amount_delivered'] += order['amount']
             elif order['status'] == 'in_transit':
                 riders_stats[rider_email]['in_transit'] += 1
+    
+    print(f"DEBUG: Returning {len(orders)} orders, summary: {total_orders} total, {completed_orders} completed")
     
     return {
         'orders': orders,
@@ -448,8 +394,8 @@ def get_order_audit_detail(
             if log.type == 'invoice_draft' and log_data.get('invoice_id') == invoice_id:
                 invoice_data = log_data
             
-            # Track all events for this invoice
-            if log_data.get('invoice_id') == invoice_id:
+            # Track all events for this invoice (by invoice_id or delivery_id match)
+            if log_data.get('invoice_id') == invoice_id or log_data.get('delivery_id') == invoice_id:
                 event_type = log.type
                 event_time = log.created_at.isoformat() + 'Z'
                 
@@ -499,6 +445,33 @@ def get_order_audit_detail(
                             'payment': log_data.get('payment')
                         }
                     })
+                # Payment events
+                elif event_type == 'payment_qr_generated':
+                    timeline.append({
+                        'event': 'Payment QR Generated',
+                        'timestamp': event_time,
+                        'details': {
+                            'amount': log_data.get('amount'),
+                            'order_id': log_data.get('order_id'),
+                            'payment_id': log_data.get('payment_id'),
+                            'gateway_order_id': log_data.get('gateway_order_id'),
+                            'expires_at': log_data.get('expires_at')
+                        }
+                    })
+                elif event_type == 'payment_confirmed':
+                    timeline.append({
+                        'event': 'Payment Confirmed',
+                        'timestamp': event_time,
+                        'details': {
+                            'amount': log_data.get('amount'),
+                            'payment_method': log_data.get('payment_method'),
+                            'upi_transaction_id': log_data.get('upi_transaction_id'),
+                            'upi_ref_id': log_data.get('upi_ref_id'),
+                            'payment_id': log_data.get('payment_id'),
+                            'gateway_order_id': log_data.get('gateway_order_id'),
+                            'gateway_payment_id': log_data.get('gateway_payment_id')
+                        }
+                    })
                 elif event_type == 'invoice_shipment_assigned':
                     timeline.append({
                         'event': 'Shipment Provider Assigned',
@@ -535,4 +508,41 @@ def get_order_audit_detail(
             'phone': rider.cellnumber if rider else None
         } if rider else None,
         'timeline': timeline
+    }
+
+
+@router.get("/admin/orders/audit/{invoice_id}/locations", response_model=Dict[str, Any])
+def get_order_location_history(
+    invoice_id: str,
+    principal: CurrentPrincipal = Depends(get_current_principal),
+    db: Session = Depends(get_db)
+):
+    """Get all location updates for a specific order"""
+    
+    # Get all location updates for this invoice
+    location_logs = db.query(models.SyncLog).filter(
+        models.SyncLog.org_id == principal.org_id,
+        models.SyncLog.type == 'rider_location_update'
+    ).order_by(models.SyncLog.created_at.asc()).all()
+    
+    locations = []
+    for log in location_logs:
+        try:
+            log_data = json.loads(log.payload or '{}')
+            if log_data.get('invoice_id') == invoice_id:
+                location_data = log_data.get('location', {})
+                locations.append({
+                    'latitude': location_data.get('lat'),
+                    'longitude': location_data.get('lng'),
+                    'timestamp': log_data.get('timestamp') or log.created_at.isoformat(),
+                    'rider_user_id': log_data.get('rider_user_id'),
+                    'created_at': log.created_at.isoformat()
+                })
+        except:
+            continue
+    
+    return {
+        'invoice_id': invoice_id,
+        'total_locations': len(locations),
+        'locations': locations
     }

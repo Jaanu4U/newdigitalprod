@@ -161,7 +161,9 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun AppNavigator() {
     val navController: NavHostController = rememberNavController()
-    val startDestination = if (TokenStore.isLoggedIn()) "deliveries" else "login"
+    // Check if user is logged in with valid token before auto-navigation
+    val hasValidSession = TokenStore.isLoggedIn() && !TokenStore.getAccessToken().isNullOrBlank()
+    val startDestination = if (hasValidSession) "deliveries" else "login"
     var deliveriesRefreshKey by remember { mutableIntStateOf(0) }
     
     NavHost(navController = navController, startDestination = startDestination) {

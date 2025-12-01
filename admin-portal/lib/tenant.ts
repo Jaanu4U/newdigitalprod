@@ -11,8 +11,17 @@ export function getTenantSlugFromHost(hostname?: string): string | null {
 
 export function withTenantHeaders(init?: RequestInit): RequestInit {
   const slug = getTenantSlugFromHost()
-  if (!slug) return init || {}
   const headers = new Headers(init?.headers || {})
-  headers.set('X-Org', slug)
+  
+  if (slug) {
+    headers.set('X-Org', slug)
+  } else if (typeof window !== 'undefined') {
+    // Fallback: use org_id from localStorage when no tenant slug
+    const orgId = localStorage.getItem('dc_org_id')
+    if (orgId) {
+      headers.set('X-Org-Id', orgId)
+    }
+  }
+  
   return { ...(init || {}), headers }
 }

@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Audit API Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .log { background: #f5f5f5; padding: 10px; margin: 10px 0; border-radius: 5px; }
+        .error { background: #ffebee; color: #c62828; }
+        .success { background: #e8f5e9; color: #2e7d32; }
+        button { padding: 10px 20px; margin: 5px; cursor: pointer; }
+        pre { background: #263238; color: #aed581; padding: 15px; border-radius: 5px; overflow-x: auto; }
+    </style>
+</head>
+<body>
+    <h1>Audit API Test - jugesh.digitalchain.in</h1>
+    
+    <div>
+        <h3>Login First:</h3>
+        <input type="email" id="email" value="jugeshr@gmail.com" placeholder="Email">
+        <input type="password" id="password" value="12345678" placeholder="Password">
+        <button onclick="login()">Login</button>
+    </div>
+    
+    <div>
+        <h3>Test Audit Endpoint:</h3>
+        <button onclick="testAudit()">Fetch Audit Data</button>
+        <button onclick="clearLogs()">Clear Logs</button>
+    </div>
+    
+    <div id="logs"></div>
+    
+    <script>
+        const BASE_URL = window.location.origin + '/api';
+        const ORG_ID = '708ebe84-e2af-4d2d-b2bf-9f37ba1a7b65';
+        
+        function log(message, type = 'info') {
+            const logs = document.getElementById('logs');
+            const div = document.createElement('div');
+            div.className = `log ${type}`;
+            
+            if (typeof message === 'object') {
+                const pre = document.createElement('pre');
+                pre.textContent = JSON.stringify(message, null, 2);
+                div.appendChild(pre);
+            } else {
+                div.textContent = message;
+            }
+            
+            logs.appendChild(div);
+            console.log(message);
+        }
+        
+        function clearLogs() {
+            document.getElementById('logs').innerHTML = '';
+        }
+        
+        async function login() {
+            try {
+                const email = document.getElementById('email').value;
+                const password = document.getElementById('password').value;
+                
+                log(`Logging in as ${email}...`);
+                
+                const response = await fetch(`${BASE_URL}/v1/auth/login`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Org': 'jugesh'
+                    },
+                    body: JSON.stringify({
+                        email,
+                        password,
+                        org_id: ORG_ID
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    localStorage.setItem('dc_access', data.access_token);
+                    localStorage.setItem('dc_org_id', data.org_id);
+                    log('✅ Login successful!', 'success');
+                    log({ token: data.access_token.substring(0, 50) + '...', org_id: data.org_id });
+                } else {
+                    log('❌ Login failed: ' + JSON.stringify(data), 'error');
+                }
+            } catch (err) {
+                log('❌ Error: ' + err.message, 'error');
+            }
+        }
+        
+        async function testAudit() {
+            try {
+                const token = localStorage.getItem('dc_access');
+                const orgId = localStorage.getItem('dc_org_id');
+                
+                if (!token) {
+                    log('❌ No token found. Please login first.', 'error');
+                    return;
+                }
+                
+                log('Fetching audit data...');
+                log(`Using token: ${token.substring(0, 50)}...`);
+                log(`Org ID from localStorage: ${orgId}`);
+                log(`Tenant slug from hostname: jugesh`);
+                
+                const headers = {
+                    'Authorization': `Bearer ${token}`,
+                    'X-Org': 'jugesh'
+                };
+                
+                if (orgId) {
+                    headers['X-Org-Id'] = orgId;
+                }
+                
+                log('Request headers:', { ...headers, Authorization: 'Bearer ...' });
+                
+                const url = `${BASE_URL}/v1/admin/orders/audit`;
+                log(`Fetching from: ${url}`);
+                
+                const response = await fetch(url, { headers });
+                
+                log(`Response status: ${response.status}`);
+                
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    log('❌ Error response: ' + errorText, 'error');
+                    return;
+                }
+                
+                const data = await response.json();
+                log('✅ Success! Received data:', 'success');
+                log({
+                    orders_count: data.orders?.length || 0,
+                    summary: data.summary,
+                    first_order: data.orders?.[0]
+                });
+                
+            } catch (err) {
+                log('❌ Error: ' + err.message, 'error');
+                console.error(err);
+            }
+        }
+        
+        // Auto-test on load if token exists
+        window.onload = () => {
+            const token = localStorage.getItem('dc_access');
+            if (token) {
+                log('Found existing token in localStorage', 'success');
+                log(`Token: ${token.substring(0, 50)}...`);
+            } else {
+                log('No token found in localStorage. Please login first.');
+            }
+        };
+    </script>
+</body>
+</html>

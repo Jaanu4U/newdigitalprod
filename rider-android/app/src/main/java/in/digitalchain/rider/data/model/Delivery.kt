@@ -9,5 +9,6 @@ data class Delivery(
     val riderStatus: String,
     val latitude: Double?,
     val longitude: Double?,
-    val customerPhone: String?
+    val customerPhone: String?,
+    val amount: Double?
 )

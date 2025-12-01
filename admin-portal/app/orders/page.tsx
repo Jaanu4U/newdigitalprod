@@ -1059,7 +1059,7 @@ function OrdersInner() {
                           <div className="text-[10px] text-yellow-600 font-medium">⏳ Pending acceptance</div>
                         )}
                         {r.rider_assignment_status === 'rejected' && (
-                          <div className="text-[10px] text-red-600 font-medium">❌ Rejected</div>
+                          <div className="text-[10px] text-red-600 font-medium">⏸️ On Hold</div>
                         )}
                       </div>
                     ) : (
@@ -1283,7 +1283,7 @@ function OrdersInner() {
                 }`}>
                   {selectedInvoice.rider_assignment_status === 'pending' 
                     ? `⚠️ Currently pending: ${selectedInvoice.rider_name}. Select a new rider to reassign.`
-                    : `❌ Rejected by: ${selectedInvoice.rider_name}. Select a new rider to reassign.`
+                    : `⏸️ On Hold by: ${selectedInvoice.rider_name}. Select a new rider to reassign.`
                   }
                 </div>
               )}

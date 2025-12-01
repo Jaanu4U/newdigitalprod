@@ -68,6 +68,7 @@ class DeliveryOut(BaseModel):
     customer_phone: Optional[str] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None
+    amount: Optional[float] = None
     
 class OrgLookupOut(BaseModel):
     org_id: str

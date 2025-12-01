@@ -32,8 +32,12 @@ class TenantMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         # Allow explicit X-Org header to override (from Nginx or client)
         x_org = request.headers.get("x-org")
+        x_org_id = request.headers.get("x-org-id")
+        
         if x_org:
             request.state.tenant_lookup = ("slug", x_org.strip().lower())
+        elif x_org_id:
+            request.state.tenant_lookup = ("org_id", x_org_id.strip())
         else:
             request.state.tenant_lookup = parse_tenant_from_host(request.headers.get("host", ""))
         return await call_next(request)
@@ -47,4 +51,6 @@ def resolve_tenant(request: Request, db: Session) -> Optional[Organization]:
         return db.query(Organization).filter(Organization.slug == value, Organization.status == "active").first()
     if kind == "domain":
         return db.query(Organization).filter(Organization.custom_domain == value, Organization.status == "active").first()
+    if kind == "org_id":
+        return db.query(Organization).filter(Organization.org_id == value, Organization.status == "active").first()
     return None

@@ -236,7 +236,7 @@ export default function SettingsPage() {
       setCountry(data.country || "");
       setPay({
         enabled: Boolean(data.payment_settings?.enabled) || false,
-        provider: data.payment_settings?.provider || "",
+        provider: (data.payment_settings?.provider || "").toLowerCase(),
         currency: data.payment_settings?.currency || "",
         public_key: data.payment_settings?.public_key || "",
         secret_key: data.payment_settings?.secret_key || "",
@@ -391,7 +391,9 @@ export default function SettingsPage() {
     setSuccess(null);
     setSavingPayment(true);
     try {
-      await putOrgSettings({ payment_settings: pay });
+      // Gateway disabled by policy
+      const payload = { ...pay, provider: (pay.provider || '').toLowerCase(), enabled: false } as any;
+      await putOrgSettings({ payment_settings: payload });
       await fetchOrgSettings(token);
       setSuccess("Payment settings updated");
       setTimeout(() => setSuccess(null), 3000);
@@ -407,7 +409,8 @@ export default function SettingsPage() {
     setSuccess(null);
     setSavingUpi(true);
     try {
-      await putOrgSettings({ payment_settings: { ...pay, upi: pay.upi } });
+      const payload: any = { ...pay, upi: pay.upi, enabled: false };
+      await putOrgSettings({ payment_settings: payload });
       await fetchOrgSettings(token);
       setSuccess("UPI settings updated");
       setTimeout(() => setSuccess(null), 3000);
@@ -810,81 +813,6 @@ export default function SettingsPage() {
                   className="inline-flex items-center gap-2 px-6 py-2 rounded-md bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
                 >
                   {savingOrg ? (
-                    <>
-                      <Loader2 size={16} className="animate-spin" />
-                      Saving...
-                    </>
-                  ) : (
-                    <>
-                      <Save size={16} />
-                      Save Changes
-                    </>
-                  )}
-                </button>
-              </div>
-            </div>
-
-            {/* Payment Settings */}
-            <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-6 mb-6">
-              <div className="flex items-center gap-3 mb-6">
-                <div className="h-10 w-10 rounded-full bg-purple-600 flex items-center justify-center">
-                  <CreditCard size={20} className="text-white" />
-                </div>
-                <div>
-                  <h3 className="text-lg font-semibold text-gray-900">Payment Settings</h3>
-                  <p className="text-sm text-gray-500">Configure payment gateway integration</p>
-                </div>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <label className="inline-flex items-center gap-2 text-sm text-gray-700">
-                  <input type="checkbox" checked={!!pay.enabled} onChange={(e) => setPay({ ...pay, enabled: e.target.checked })} />
-                  Enable payments
-                </label>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Provider</label>
-                  <select value={pay.provider || ""} onChange={(e) => setPay({ ...pay, provider: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md">
-                    <option value="">Select provider...</option>
-                    <option value="Razorpay">Razorpay</option>
-                    <option value="Stripe">Stripe</option>
-                    <option value="Cashfree">Cashfree</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Currency</label>
-                  <input value={pay.currency || ""} onChange={(e) => setPay({ ...pay, currency: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md" placeholder="INR" />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Public Key</label>
-                  <input value={pay.public_key || ""} onChange={(e) => setPay({ ...pay, public_key: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md" placeholder="pk_..." />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Secret Key</label>
-                  <input type="password" value={pay.secret_key || ""} onChange={(e) => setPay({ ...pay, secret_key: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md" placeholder="sk_..." />
-                </div>
-                <div className="md:col-span-2">
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Webhook Secret
-                    <span className="text-xs text-gray-500 ml-2">(Optional - Required for auto payment confirmation)</span>
-                  </label>
-                  <input 
-                    type="password" 
-                    value={pay.webhook_secret || ""} 
-                    onChange={(e) => setPay({ ...pay, webhook_secret: e.target.value })} 
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md" 
-                    placeholder="whsec_..." 
-                  />
-                  <p className="text-xs text-gray-500 mt-1">
-                    Get this from Razorpay Dashboard → Settings → Webhooks. Required for automatic payment confirmation.
-                  </p>
-                </div>
-              </div>
-              <div className="flex justify-end pt-4 border-t mt-4">
-                <button
-                  onClick={handleSavePayment}
-                  disabled={savingPayment}
-                  className="inline-flex items-center gap-2 px-6 py-2 rounded-md bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
-                >
-                  {savingPayment ? (
                     <>
                       <Loader2 size={16} className="animate-spin" />
                       Saving...

@@ -214,11 +214,11 @@ fun DeliveryDetailScreen(
         result.getOrNull()?.find { it.deliveryId == deliveryId }?.let { del ->
             delivery = del
             riderStatus = del.riderStatus
-            // Set default cash amount to 250 (you can change this or fetch from backend)
+            // Initialize cash amount from delivery data
             if (cashAmount.isEmpty()) {
-                cashAmount = "250.00"
+                cashAmount = del.amount?.toString() ?: "0.00"
             }
-            android.util.Log.d("DeliveryDetail", "Loaded delivery: id=${del.deliveryId}, lat=${del.latitude}, lng=${del.longitude}")
+            android.util.Log.d("DeliveryDetail", "Loaded delivery: id=${del.deliveryId}, lat=${del.latitude}, lng=${del.longitude}, amount=${del.amount}")
         }
         loading = false
     }
@@ -226,30 +226,6 @@ fun DeliveryDetailScreen(
     LaunchedEffect(riderStatus) {
         if (!riderStatus.contains("accepted", true)) {
             DeliveryCache.clearCapturedLocation(deliveryId)
-        }
-    }
-    
-    // Poll payment status when QR is generated
-    LaunchedEffect(paymentId, paymentCompleted) {
-        val currentPaymentId = paymentId
-        if (currentPaymentId != null && !paymentCompleted) {
-            while (!paymentCompleted) {
-                delay(3000) // Poll every 3 seconds
-                try {
-                    val statusResult = repo.getPaymentStatus(currentPaymentId)
-                    statusResult.getOrNull()?.let { status ->
-                        paymentStatus = status.status
-                        if (status.status == "completed" || status.status == "success") {
-                            paymentCompleted = true
-                            transactionId = status.upiTransactionId
-                            paymentCompletedAt = status.paymentCompletedAt
-                            upiId = status.upiTransactionId ?: ""
-                        }
-                    }
-                } catch (e: Exception) {
-                    android.util.Log.e("PaymentPoll", "Error polling: ${e.message}")
-                }
-            }
         }
     }
 
@@ -392,7 +368,8 @@ fun DeliveryDetailScreen(
                         currentStep = currentStep,
                         customerName = currentDelivery.customer,
                         customerPhone = currentDelivery.customerPhone,
-                        onCallCustomer = callCustomerAction
+                        onCallCustomer = callCustomerAction,
+                        invoiceAmount = currentDelivery.amount
                     )
 
                     // Debug Info
@@ -826,95 +803,34 @@ fun DeliveryDetailScreen(
                                         )
                                     }
                                 }
-                            } ?: run {
-                                if (showManualEntry) {
-                                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                        OutlinedTextField(
-                                            value = manualLat,
-                                            onValueChange = { manualLat = it },
-                                            label = { Text("Latitude") },
-                                            modifier = Modifier.weight(1f),
-                                            shape = RoundedCornerShape(14.dp),
-                                            colors = textFieldColors
-                                        )
-                                        OutlinedTextField(
-                                            value = manualLng,
-                                            onValueChange = { manualLng = it },
-                                            label = { Text("Longitude") },
-                                            modifier = Modifier.weight(1f),
-                                            shape = RoundedCornerShape(14.dp),
-                                            colors = textFieldColors
-                                        )
-                                    }
-                                    Button(
-                                        onClick = {
-                                            manualLat.toDoubleOrNull()?.let { lat ->
-                                                manualLng.toDoubleOrNull()?.let { lng ->
-                                                    persistLocation(Pair(lat, lng))
-                                                    showManualEntry = false
-                                                }
-                                            }
-                                        },
-                                        modifier = Modifier.fillMaxWidth().height(48.dp),
-                                        shape = RoundedCornerShape(14.dp)
-                                    ) {
-                                        Text("Save Manual Coordinates")
-                                    }
-                                } else {
-                                    Button(
-                                        onClick = {
-                                            when (ContextCompat.checkSelfPermission(ctx, Manifest.permission.ACCESS_FINE_LOCATION)) {
-                                                PackageManager.PERMISSION_GRANTED -> {
-                                                    scope.launch {
-                                                        locationLoading = true
-                                                        try {
-                                                            val fusedLocationClient = LocationServices.getFusedLocationProviderClient(ctx)
-                                                            val loc = fusedLocationClient.lastLocation.await()
-                                                            loc?.let { persistLocation(Pair(it.latitude, it.longitude)) }
-                                                        } catch (e: Exception) {
-                                                            showManualEntry = true
-                                                        } finally {
-                                                            locationLoading = false
-                                                        }
-                                                    }
-                                                }
-                                                else -> locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
-                                            }
-                                        },
-                                        modifier = Modifier.fillMaxWidth().height(50.dp),
-                                        enabled = !locationLoading,
-                                        shape = RoundedCornerShape(14.dp)
-                                    ) {
-                                        if (locationLoading) {
-                                            CircularProgressIndicator(Modifier.size(20.dp), color = Color.White, strokeWidth = 2.dp)
-                                        } else {
-                                            Icon(
-                                                imageVector = Icons.Outlined.LocationOn,
-                                                contentDescription = null,
-                                                tint = Color.White
-                                            )
-                                            Spacer(Modifier.width(8.dp))
-                                            Text("Capture Current Location")
-                                        }
-                                    }
-                                    OutlinedButton(
-                                        onClick = { showManualEntry = true },
-                                        modifier = Modifier.fillMaxWidth().height(48.dp),
-                                        shape = RoundedCornerShape(14.dp)
-                                    ) {
-                                        Text("Enter Coordinates Manually")
-                                    }
-                                }
                             }
 
-                            if (riderStatus.contains("accepted", true) && location != null) {
+                            if (riderStatus.contains("accepted", true)) {
                                 Button(
                                     onClick = {
                                         scope.launch {
-                                            val coords = location ?: run {
-                                                snackbarHostState.showSnackbar("Capture location first")
+                                            // Auto-capture current location before starting delivery
+                                            val coords = try {
+                                                locationLoading = true
+                                                val fusedLocationClient = LocationServices.getFusedLocationProviderClient(ctx)
+                                                val loc = fusedLocationClient.lastLocation.await()
+                                                if (loc != null) {
+                                                    val currentCoords = Pair(loc.latitude, loc.longitude)
+                                                    persistLocation(currentCoords)
+                                                    currentCoords
+                                                } else {
+                                                    snackbarHostState.showSnackbar("Unable to get current location")
+                                                    locationLoading = false
+                                                    return@launch
+                                                }
+                                            } catch (e: Exception) {
+                                                snackbarHostState.showSnackbar("Location error: ${e.message}")
+                                                locationLoading = false
                                                 return@launch
+                                            } finally {
+                                                locationLoading = false
                                             }
+                                            
                                             val result = repo.startDelivery(currentDelivery.orderId, coords)
                                             result.fold(
                                                 onSuccess = {
@@ -933,15 +849,22 @@ fun DeliveryDetailScreen(
                                         }
                                     },
                                     modifier = Modifier.fillMaxWidth().height(56.dp),
-                                    shape = RoundedCornerShape(16.dp)
+                                    shape = RoundedCornerShape(16.dp),
+                                    enabled = !locationLoading
                                 ) {
-                                    Icon(
-                                        imageVector = Icons.Outlined.LocalShipping,
-                                        contentDescription = null,
-                                        tint = Color.White
-                                    )
-                                    Spacer(Modifier.width(8.dp))
-                                    Text("Start Delivery", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold))
+                                    if (locationLoading) {
+                                        CircularProgressIndicator(modifier = Modifier.size(24.dp), color = Color.White)
+                                        Spacer(Modifier.width(8.dp))
+                                        Text("Getting Location...", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold))
+                                    } else {
+                                        Icon(
+                                            imageVector = Icons.Outlined.LocalShipping,
+                                            contentDescription = null,
+                                            tint = Color.White
+                                        )
+                                        Spacer(Modifier.width(8.dp))
+                                        Text("Start Delivery", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold))
+                                    }
                                 }
                             }
                         }
@@ -1047,20 +970,20 @@ fun DeliveryDetailScreen(
                                     modifier = Modifier.fillMaxWidth(),
                                     verticalArrangement = Arrangement.spacedBy(16.dp)
                                 ) {
-                                    if (!paymentCompleted && qrCodeBitmap == null) {
+                                    // Show Generate QR button if no QR code yet
+                                    if (qrCodeBitmap == null) {
                                         Button(
                                             onClick = {
                                                 scope.launch {
                                                     qrGenerating = true
                                                     try {
-                                                        val amount = cashAmount.toDoubleOrNull() ?: 250.0
+                                                        val amount = cashAmount.toDoubleOrNull() ?: 0.0
                                                         val result = repo.generatePaymentQr(deliveryId = deliveryId, amount = amount)
                                                         result.getOrNull()?.let { response ->
                                                             val imageBytes = Base64.decode(response.qrCode, Base64.DEFAULT)
                                                             qrCodeBitmap = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
                                                             paymentId = response.paymentId
                                                             upiString = response.upiString
-                                                            paymentStatus = "pending"
                                                         } ?: run { snackbarHostState.showSnackbar("Failed to generate QR code") }
                                                     } catch (e: Exception) {
                                                         snackbarHostState.showSnackbar(e.message ?: "Error generating QR")
@@ -1084,46 +1007,52 @@ fun DeliveryDetailScreen(
                                             }
                                         }
                                     }
+                                    
+                                    // Show QR code if generated
                                     qrCodeBitmap?.let { bitmap ->
-                                        if (!paymentCompleted) {
-                                            Card(
-                                                modifier = Modifier.fillMaxWidth().aspectRatio(1f),
-                                                shape = RoundedCornerShape(16.dp),
-                                                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+                                        Card(
+                                            modifier = Modifier.fillMaxWidth().aspectRatio(1f),
+                                            shape = RoundedCornerShape(16.dp),
+                                            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+                                        ) {
+                                            Box(
+                                                modifier = Modifier.fillMaxSize().background(Color.White).padding(16.dp),
+                                                contentAlignment = Alignment.Center
                                             ) {
-                                                Box(
-                                                    modifier = Modifier.fillMaxSize().background(Color.White).padding(16.dp),
-                                                    contentAlignment = Alignment.Center
-                                                ) {
-                                                    Image(bitmap = bitmap.asImageBitmap(), contentDescription = "UPI QR Code", modifier = Modifier.fillMaxSize())
-                                                }
-                                            }
-                                            Column(
-                                                modifier = Modifier.fillMaxWidth(),
-                                                horizontalAlignment = Alignment.CenterHorizontally,
-                                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                                            ) {
-                                                Text(
-                                                    text = "₹${String.format("%.2f", cashAmount.toDoubleOrNull() ?: 250.0)}",
-                                                    style = MaterialTheme.typography.headlineMedium,
-                                                    fontWeight = FontWeight.Bold,
-                                                    color = MaterialTheme.colorScheme.primary
-                                                )
-                                                Text(
-                                                    text = "Ask customer to scan and pay",
-                                                    style = MaterialTheme.typography.bodyMedium,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                )
-                                                Row(
-                                                    verticalAlignment = Alignment.CenterVertically,
-                                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                                ) {
-                                                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                                                    Text(text = "Waiting for payment...", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
-                                                }
+                                                Image(bitmap = bitmap.asImageBitmap(), contentDescription = "UPI QR Code", modifier = Modifier.fillMaxSize())
                                             }
                                         }
+                                        Column(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalAlignment = Alignment.CenterHorizontally,
+                                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            Text(
+                                                text = "₹${String.format("%.2f", cashAmount.toDoubleOrNull() ?: 0.0)}",
+                                                style = MaterialTheme.typography.headlineMedium,
+                                                fontWeight = FontWeight.Bold,
+                                                color = MaterialTheme.colorScheme.primary
+                                            )
+                                            Text(
+                                                text = "Ask customer to scan and pay",
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
                                     }
+                                    
+                                    // Transaction ID input field - always visible when UPI is selected
+                                    OutlinedTextField(
+                                        value = upiId,
+                                        onValueChange = { upiId = it },
+                                        label = { Text("Transaction ID / UPI Ref No.") },
+                                        placeholder = { Text("Enter transaction number") },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        shape = RoundedCornerShape(14.dp),
+                                        colors = textFieldColors,
+                                        supportingText = { Text("Enter UPI transaction ID after payment") },
+                                        singleLine = true
+                                    )
                                     if (paymentCompleted) {
                                         Card(
                                             modifier = Modifier.fillMaxWidth(),
@@ -1167,16 +1096,6 @@ fun DeliveryDetailScreen(
                                                 }
                                             }
                                         }
-                                    } else if (!paymentCompleted && qrCodeBitmap == null) {
-                                        OutlinedTextField(
-                                            value = upiId,
-                                            onValueChange = { upiId = it },
-                                            label = { Text("Transaction / UTR ID (Manual)") },
-                                            modifier = Modifier.fillMaxWidth(),
-                                            shape = RoundedCornerShape(14.dp),
-                                            colors = textFieldColors,
-                                            supportingText = { Text("Enter manually if QR not used") }
-                                        )
                                     }
                                 }
                                 "card" -> OutlinedTextField(
@@ -1249,9 +1168,30 @@ fun DeliveryDetailScreen(
                             Button(
                                 onClick = {
                                     scope.launch {
-                                        val coords = location ?: run {
-                                            snackbarHostState.showSnackbar("Capture drop location before completing")
-                                            return@launch
+                                        // Capture current location before completing
+                                        val coords = try {
+                                            locationLoading = true
+                                            val fusedLocationClient = LocationServices.getFusedLocationProviderClient(ctx)
+                                            val loc = fusedLocationClient.lastLocation.await()
+                                            if (loc != null) {
+                                                val currentCoords = Pair(loc.latitude, loc.longitude)
+                                                persistLocation(currentCoords)
+                                                currentCoords
+                                            } else {
+                                                location ?: run {
+                                                    snackbarHostState.showSnackbar("Unable to get current location. Please capture location manually.")
+                                                    locationLoading = false
+                                                    return@launch
+                                                }
+                                            }
+                                        } catch (e: Exception) {
+                                            location ?: run {
+                                                snackbarHostState.showSnackbar("Location error: ${e.message}. Please capture location manually.")
+                                                locationLoading = false
+                                                return@launch
+                                            }
+                                        } finally {
+                                            locationLoading = false
                                         }
                                         
                                         // Upload POD image first if captured
@@ -1274,7 +1214,7 @@ fun DeliveryDetailScreen(
                                         
                                         val paymentData = when (paymentMethod) {
                                             "cash" -> mapOf("method" to "cash", "cash_amount" to cashAmount.toDoubleOrNull())
-                                            "upi" -> mapOf("method" to "upi", "upi_id" to upiId)
+                                            "upi" -> mapOf("method" to "upi", "upi_id" to upiId, "transaction_id" to upiId)
                                             "card" -> mapOf("method" to "card", "card_last4" to cardLast4)
                                             else -> mapOf("method" to "cash")
                                         }
@@ -1297,7 +1237,7 @@ fun DeliveryDetailScreen(
                                         )
                                     }
                                 },
-                                enabled = location != null && 
+                                enabled = !locationLoading &&
                                     (paymentMethod == "cash" && cashAmount.isNotEmpty() ||
                                      paymentMethod == "upi" && upiId.isNotEmpty() ||
                                      paymentMethod == "card" && cardLast4.isNotEmpty()),
@@ -1474,7 +1414,8 @@ private fun InvoiceHeroCard(
     currentStep: Int,
     customerName: String,
     customerPhone: String?,
-    onCallCustomer: (() -> Unit)?
+    onCallCustomer: (() -> Unit)?,
+    invoiceAmount: Double?
 ) {
     val normalizedStatus = riderStatus.replace("_", " ").replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
 
@@ -1494,7 +1435,10 @@ private fun InvoiceHeroCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
                     Text(
                         text = "Invoice",
                         style = MaterialTheme.typography.labelMedium.copy(color = Color.White.copy(alpha = 0.6f))
@@ -1503,10 +1447,14 @@ private fun InvoiceHeroCard(
                         text = orderId,
                         style = MaterialTheme.typography.titleLarge.copy(
                             fontWeight = FontWeight.Bold,
-                            color = Color.White
-                        )
+                            color = Color.White,
+                            fontSize = 20.sp
+                        ),
+                        maxLines = 2,
+                        softWrap = true
                     )
                 }
+                Spacer(modifier = Modifier.width(12.dp))
                 Surface(
                     shape = RoundedCornerShape(12.dp),
                     color = statusColor.copy(alpha = 0.15f)
@@ -1534,6 +1482,30 @@ private fun InvoiceHeroCard(
             }
 
             HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
+
+            // Invoice Amount (if available)
+            invoiceAmount?.let { amount ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Invoice Amount",
+                        style = MaterialTheme.typography.labelMedium.copy(
+                            color = Color.White.copy(alpha = 0.6f)
+                        )
+                    )
+                    Text(
+                        text = "₹${String.format("%.2f", amount)}",
+                        style = MaterialTheme.typography.titleMedium.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF4ADE80)
+                        )
+                    )
+                }
+                HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
+            }
 
             // Delivery Progress
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {

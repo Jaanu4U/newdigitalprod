@@ -747,7 +747,10 @@ def save_invoice(customer_id: str, payload: SaveInvoiceIn, request: Request, pri
 
 @router.delete('/invoice/draft/{draft_id}', response_model=Dict[str, Any])
 def delete_invoice_draft(draft_id: int, request: Request, principal: CurrentPrincipal = Depends(get_current_principal), db: Session = Depends(get_db)):
-    """Delete an invoice draft by SyncLog ID"""
+    """Delete an invoice draft and all related audit records"""
+    import logging
+    logger = logging.getLogger(__name__)
+    
     if not _role_can_invoice(principal.role or ''):
         raise HTTPException(status_code=403, detail='Not permitted to delete invoice')
     org = _collect_org(db, principal, request)
@@ -762,11 +765,79 @@ def delete_invoice_draft(draft_id: int, request: Request, principal: CurrentPrin
     if not draft:
         raise HTTPException(status_code=404, detail='Invoice draft not found')
     
-    # Delete it
+    # Get invoice_id from the draft payload
+    import json as _json
+    deleted_count = 0
+    invoice_id = None
+    
+    try:
+        draft_data = _json.loads(draft.payload or '{}')
+        invoice_id = draft_data.get('invoice_id')
+        logger.info(f"Deleting invoice draft {draft_id}, invoice_id: {invoice_id}")
+        
+        if invoice_id:
+            # Delete all related records for this invoice_id
+            # 1. Delete rider assignments (audit records)
+            assignments = db.query(models.SyncLog).filter(
+                models.SyncLog.org_id == org.org_id,
+                models.SyncLog.type == 'invoice_rider_assigned'
+            ).all()
+            
+            logger.info(f"Found {len(assignments)} total assignments to check")
+            
+            for assignment in assignments:
+                try:
+                    assignment_data = _json.loads(assignment.payload or '{}')
+                    assignment_invoice_id = assignment_data.get('invoice_id')
+                    if assignment_invoice_id == invoice_id:
+                        logger.info(f"Deleting assignment {assignment.id} for invoice {invoice_id}")
+                        db.delete(assignment)
+                        deleted_count += 1
+                except Exception as e:
+                    logger.error(f"Error checking assignment {assignment.id}: {e}")
+            
+            # 2. Delete tracking updates
+            tracking_updates = db.query(models.SyncLog).filter(
+                models.SyncLog.org_id == org.org_id,
+                models.SyncLog.type == 'invoice_tracking_update'
+            ).all()
+            
+            for tracking in tracking_updates:
+                try:
+                    tracking_data = _json.loads(tracking.payload or '{}')
+                    if tracking_data.get('invoice_id') == invoice_id:
+                        logger.info(f"Deleting tracking update {tracking.id} for invoice {invoice_id}")
+                        db.delete(tracking)
+                        deleted_count += 1
+                except Exception as e:
+                    logger.error(f"Error checking tracking {tracking.id}: {e}")
+                    
+            # 3. Delete delivery_completed records
+            delivery_logs = db.query(models.SyncLog).filter(
+                models.SyncLog.org_id == org.org_id,
+                models.SyncLog.type == 'delivery_completed'
+            ).all()
+            
+            for dlog in delivery_logs:
+                try:
+                    dlog_data = _json.loads(dlog.payload or '{}')
+                    if dlog_data.get('invoice_id') == invoice_id:
+                        logger.info(f"Deleting delivery_completed {dlog.id} for invoice {invoice_id}")
+                        db.delete(dlog)
+                        deleted_count += 1
+                except Exception as e:
+                    logger.error(f"Error checking delivery log {dlog.id}: {e}")
+                    
+    except Exception as e:
+        logger.error(f"Error during delete cascade: {e}")
+    
+    # Delete the draft itself
+    logger.info(f"Deleting draft {draft_id}")
     db.delete(draft)
     db.commit()
     
-    return {'status': 'ok', 'deleted_id': draft_id}
+    logger.info(f"Deleted invoice {invoice_id}: draft + {deleted_count} related records")
+    return {'status': 'ok', 'deleted_id': draft_id, 'invoice_id': invoice_id, 'related_records_deleted': deleted_count}
 
 
 class AssignRiderIn(BaseModel):

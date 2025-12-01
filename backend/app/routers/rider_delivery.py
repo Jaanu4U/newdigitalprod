@@ -48,6 +48,9 @@ def resolve_invoice_id(invoice_identifier: str, org_id: str, db: Session) -> str
 @router.get("/rider/assigned-orders", response_model=Dict[str, Any])
 def get_assigned_orders(principal: CurrentPrincipal = Depends(get_current_principal), db: Session = Depends(get_db)):
     """Get all orders assigned to the current rider"""
+    import logging
+    logger = logging.getLogger("uvicorn")
+    
     if (principal.role or '').lower() != 'rider':
         raise HTTPException(status_code=403, detail='Only riders can access this endpoint')
     
@@ -113,8 +116,9 @@ def get_assigned_orders(principal: CurrentPrincipal = Depends(get_current_princi
                     except:
                         pass
                 
-                # Skip if no invoice data found
+                # Skip if no invoice data found (invoice was deleted)
                 if not invoice_data:
+                    logger.info(f"Skipping assignment for invoice_id {invoice_id_from_assignment} - no draft found (deleted)")
                     continue
                     
                 # Use invoice_id from draft if not in assignment
@@ -122,8 +126,6 @@ def get_assigned_orders(principal: CurrentPrincipal = Depends(get_current_princi
                 
                 # Get customer info - prioritize company_name for B2B customers
                 if customer:
-                    import logging
-                    logger = logging.getLogger("uvicorn")
                     logger.info(f"[RIDER] Found customer: name={repr(customer.name)}, company={repr(customer.company_name)}, ctype={repr(customer.ctype)}")
                     
                     # For B2B customers or when name is empty, use company_name
@@ -143,8 +145,6 @@ def get_assigned_orders(principal: CurrentPrincipal = Depends(get_current_princi
                     customer_address = customer.address or "No Address"
                     customer_phone = customer.phone or ""
                 else:
-                    import logging
-                    logger = logging.getLogger("uvicorn")
                     logger.info(f"[RIDER] Customer not found, using invoice data")
                     # Fallback to invoice data
                     # Check if it's B2B and has company name in invoice data
@@ -235,9 +235,10 @@ def get_assigned_orders(principal: CurrentPrincipal = Depends(get_current_princi
                     'rider_status': rider_status
                 })
         except Exception as e:
-            print(f"Error processing assignment: {e}")
+            logger.error(f"Error processing assignment: {e}")
             continue
     
+    logger.info(f"Returning {len(orders)} orders to rider {principal.user_id}")
     return {'orders': orders, 'count': len(orders)}
 
 
@@ -255,15 +256,48 @@ def get_order_detail(invoice_id: str, principal: CurrentPrincipal = Depends(get_
     
     assigned_to_me = False
     customer_id = None
+    matched_invoice_uuid = None
+    
     for assignment in assignments:
         try:
             data = json.loads(assignment.payload or '{}')
+            # Match by UUID or check if invoice_id matches the invoice_no we're looking for
             if data.get('invoice_id') == invoice_id and data.get('rider_user_id') == principal.user_id:
                 assigned_to_me = True
                 customer_id = data.get('customer_id')
+                matched_invoice_uuid = data.get('invoice_id')
                 break
         except:
             continue
+    
+    # If not matched by UUID, try to find invoice by invoice_no
+    if not assigned_to_me:
+        drafts = db.query(models.SyncLog).filter(
+            models.SyncLog.org_id == principal.org_id,
+            models.SyncLog.type == 'invoice_draft'
+        ).all()
+        
+        for draft in drafts:
+            try:
+                ddata = json.loads(draft.payload or '{}')
+                if ddata.get('invoice_no') == invoice_id:
+                    # Found invoice by invoice_no, now check if assigned
+                    found_invoice_uuid = ddata.get('invoice_id')
+                    for assignment in assignments:
+                        try:
+                            adata = json.loads(assignment.payload or '{}')
+                            if adata.get('invoice_id') == found_invoice_uuid and adata.get('rider_user_id') == principal.user_id:
+                                assigned_to_me = True
+                                customer_id = adata.get('customer_id')
+                                matched_invoice_uuid = found_invoice_uuid
+                                invoice_id = found_invoice_uuid  # Use UUID for rest of function
+                                break
+                        except:
+                            continue
+                    if assigned_to_me:
+                        break
+            except:
+                continue
     
     if not assigned_to_me:
         raise HTTPException(status_code=404, detail='Order not found or not assigned to you')
@@ -761,8 +795,8 @@ async def update_location(payload: UpdateLocationIn, principal: CurrentPrincipal
         'type': 'rider_location_update',
         'data': {
             'invoice_id': payload.invoice_id,
-            'rider_email': principal.email,
-            'rider_name': rider.name if rider else principal.email,
+            'rider_email': rider.email if rider else principal.user_id,
+            'rider_name': rider.name if rider else principal.user_id,
             'latitude': payload.location.get('lat'),
             'longitude': payload.location.get('lng'),
             'timestamp': payload.timestamp

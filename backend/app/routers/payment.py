@@ -297,16 +297,22 @@ def create_audit_log(
     actor_name: str,
     metadata: Dict[str, Any]
 ):
-    """Create audit log entry for payment event"""
+    """Create audit log entry for payment event (writes to SyncLog).
+    models.SyncLog has fields: org_id, user_id, type, payload, created_at.
+    We store the event in `type` and JSON-encode payload with useful context.
+    """
     try:
+        payload: Dict[str, Any] = {
+            **(metadata or {}),
+            "payment_id": payment_id,
+            "actor_id": actor_id,
+            "actor_name": actor_name,
+        }
         audit = models.SyncLog(
-            log_id=str(uuid.uuid4()),
             org_id=org_id,
-            entity_type="payment",
-            entity_id=payment_id,
-            action=action,
-            payload=metadata,
-            created_by=actor_id,
+            user_id=actor_id,
+            type=action,
+            payload=json.dumps(payload),
             created_at=datetime.now(timezone.utc)
         )
         db.add(audit)
@@ -404,36 +410,11 @@ async def generate_payment_qr(
     now = datetime.now(timezone.utc)
     expires_at = now + timedelta(minutes=qr_expiry_minutes)
     
-    # Try to use Razorpay if enabled
+    # Gateway disabled: always use custom UPI QR flow
     gateway_order_id = None
     gateway_error = None
-    
-    if gateway_settings.get("enabled") and gateway_settings.get("provider") == "razorpay":
-        razorpay_key_id = gateway_settings.get("key_id")
-        razorpay_key_secret = gateway_settings.get("key_secret")
-        
-        if razorpay_key_id and razorpay_key_secret:
-            try:
-                razorpay_order = create_razorpay_order(
-                    amount=request.amount,
-                    order_id=order_id,
-                    customer_phone=request.customer_phone or delivery.customer_phone or "",
-                    key_id=razorpay_key_id,
-                    key_secret=razorpay_key_secret
-                )
-                
-                if razorpay_order:
-                    gateway_order_id = razorpay_order["gateway_order_id"]
-                    print(f"✅ Razorpay order created: {gateway_order_id}")
-            except HTTPException as e:
-                # Re-raise HTTP exceptions (they have user-friendly messages)
-                raise e
-            except Exception as e:
-                # Log error but continue with manual UPI
-                gateway_error = str(e)
-                print(f"⚠️ Razorpay gateway failed, falling back to manual UPI: {e}")
-        else:
-            print("⚠️ Razorpay enabled but credentials not configured")
+    if gateway_settings.get("enabled"):
+        print("ℹ️ Payment gateway is disabled by policy. Using custom UPI QR only.")
     
     # Generate UPI string
     upi_string = create_upi_string(
@@ -493,8 +474,10 @@ async def generate_payment_qr(
         metadata={
             "amount": request.amount,
             "order_id": order_id,
+            "invoice_id": request.delivery_id,
             "delivery_id": request.delivery_id,
-            "expires_at": expires_at.isoformat()
+            "expires_at": expires_at.isoformat(),
+            "gateway_order_id": gateway_order_id
         }
     )
     
@@ -628,7 +611,12 @@ async def confirm_payment(
             "amount": payment.amount,
             "payment_method": request.payment_method,
             "upi_transaction_id": request.upi_transaction_id,
-            "upi_ref_id": request.upi_ref_id
+            "upi_ref_id": request.upi_ref_id,
+            "invoice_id": payment.delivery_id,
+            "delivery_id": payment.delivery_id,
+            "order_id": payment.order_id,
+            "gateway_order_id": payment.gateway_order_id,
+            "gateway_payment_id": payment.gateway_payment_id
         }
     )
     
@@ -845,6 +833,9 @@ async def payment_webhook(
     Implements signature verification for security.
     """
     
+    # Gateway callbacks are disabled; accept and no-op
+    raise HTTPException(status_code=410, detail="Payment gateway disabled; webhooks not accepted")
+
     # Get raw body for signature verification
     body = await request.body()
     headers = dict(request.headers)

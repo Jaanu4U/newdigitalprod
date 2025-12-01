@@ -75,6 +75,9 @@ interface ApiService {
     @POST("rider/notify-idle")
     suspend fun notifyRiderIdle(@Body body: RiderIdleNotification): Map<String, Any>
     
+    @GET("rider/orders/{invoice_id}")
+    suspend fun getOrderDetail(@Path("invoice_id") invoiceId: String): Map<String, Any>
+    
     // Payment APIs
     @POST("payment/generate-qr")
     suspend fun generatePaymentQr(@Body body: com.digitalchain.rider.data.model.GenerateQrRequest): com.digitalchain.rider.data.model.GenerateQrResponse
@@ -139,7 +142,8 @@ data class AssignedOrderDto(
     val delivery_longitude: Any?,
     val shipping_address: String?,
     val status: String,
-    val rider_status: String
+    val rider_status: String,
+    val amount: Double? = null
 )
 
 @JsonClass(generateAdapter = true)
@@ -154,7 +158,8 @@ data class DeliveryDto(
     val latitude: Any?,
     val longitude: Any?,
     val geo: Geo? = null,
-    val eta_window: String? = null
+    val eta_window: String? = null,
+    val amount: Double? = null
 )
 
 @JsonClass(generateAdapter = true)
