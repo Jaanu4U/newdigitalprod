@@ -32,7 +32,7 @@ export default function PlatformEmailPage() {
         const em = localStorage.getItem("dc_email") || "";
         if (!ignore) setEmail(em);
         
-        const res = await fetch(`${apiBase()}v1/platform/email-config`, {
+        const res = await fetch(`${apiBase()}platform/email-config`, {
           headers: {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json'
@@ -95,7 +95,7 @@ export default function PlatformEmailPage() {
     try {
       const token = localStorage.getItem("dc_access");
       if (!testRecipient) throw new Error('Enter test recipient');
-      const res = await fetch(`${apiBase()}v1/platform/email-config/test`, {
+      const res = await fetch(`${apiBase()}platform/email-config/test`, {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',

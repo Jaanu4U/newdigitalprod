@@ -60,7 +60,7 @@ export default function ProvidersAdminPage() {
     const tk = tkn || token;
     setLoading(true); setError(null);
     try {
-      const res = await fetch(`${base}v1/providers?all=true`, { headers: { Authorization: `Bearer ${tk}` }, cache: "no-store" });
+      const res = await fetch(`${base}providers?all=true`, { headers: { Authorization: `Bearer ${tk}` }, cache: "no-store" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setItems(Array.isArray(data?.items) ? data.items : []);
@@ -114,7 +114,7 @@ export default function ProvidersAdminPage() {
     setEditErr(null);
     if (!edit.name.trim()) { setEditErr("Name is required"); return; }
     try {
-      const res = await fetch(`${base}v1/providers/${editId}`, {
+      const res = await fetch(`${base}providers/${editId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({ name: edit.name.trim(), tracking_url: edit.tracking_url.trim(), active: !!edit.active }),

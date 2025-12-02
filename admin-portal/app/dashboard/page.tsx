@@ -75,9 +75,9 @@ export default function OrgAdminDashboard() {
     try {
       const h = withTenantHeaders({ headers: { Authorization: `Bearer ${token}` } });
       const [orgRes, usersRes, delivRes] = await Promise.all([
-        fetch(`${base}v1/org/settings`, h),
-        fetch(`${base}v1/org/users`, h),
-        fetch(`${base}v1/rider/deliveries`, h),
+        fetch(`${base}org/settings`, h),
+        fetch(`${base}org/users`, h),
+        fetch(`${base}rider/deliveries`, h),
       ]);
       
       if (!orgRes.ok) throw new Error(`Org HTTP ${orgRes.status}`);

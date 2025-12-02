@@ -120,7 +120,7 @@ export default function CustomersPage() {
       
       // Fetch the unmasked Google Maps API key
       const mapsRes = await fetch(
-        `${base}v1/org/maps-api-key`,
+        `${base}org/maps-api-key`,
         withTenantHeaders({
           headers: { Authorization: `Bearer ${token}` }
         })
@@ -144,7 +144,7 @@ export default function CustomersPage() {
       
       // Also fetch general settings for country code
       const res = await fetch(
-        `${base}v1/org/settings`,
+        `${base}org/settings`,
         withTenantHeaders({
           headers: { Authorization: `Bearer ${token}` }
         })
@@ -224,13 +224,12 @@ export default function CustomersPage() {
       const place = autocomplete.getPlace();
       if (!place.formatted_address) return;
       
-      setAddress(place.formatted_address);
-      
       // Extract components
       const components = place.address_components || [];
       let cityVal = '';
       let stateVal = '';
       let pinVal = '';
+      let streetAddress = '';
       
       for (const comp of components) {
         if (comp.types.includes('locality')) cityVal = comp.long_name;
@@ -238,6 +237,22 @@ export default function CustomersPage() {
         if (comp.types.includes('postal_code')) pinVal = comp.long_name;
       }
       
+      // Build street address without city, state, pin to avoid duplication
+      const addressParts = [];
+      for (const comp of components) {
+        if (comp.types.includes('street_number') || 
+            comp.types.includes('route') ||
+            comp.types.includes('sublocality') ||
+            comp.types.includes('sublocality_level_1') ||
+            comp.types.includes('sublocality_level_2') ||
+            comp.types.includes('neighborhood')) {
+          addressParts.push(comp.long_name);
+        }
+      }
+      
+      streetAddress = addressParts.length > 0 ? addressParts.join(', ') : place.formatted_address.split(',')[0];
+      
+      setAddress(streetAddress);
       if (cityVal) setCity(cityVal);
       if (stateVal) setState(stateVal);
       if (pinVal) setPin(pinVal);
@@ -286,13 +301,12 @@ export default function CustomersPage() {
       const place = autocomplete.getPlace();
       if (!place.formatted_address) return;
       
-      setEAddress(place.formatted_address);
-      
       // Extract components
       const components = place.address_components || [];
       let cityVal = '';
       let stateVal = '';
       let pinVal = '';
+      let streetAddress = '';
       
       for (const comp of components) {
         if (comp.types.includes('locality')) cityVal = comp.long_name;
@@ -300,6 +314,22 @@ export default function CustomersPage() {
         if (comp.types.includes('postal_code')) pinVal = comp.long_name;
       }
       
+      // Build street address without city, state, pin to avoid duplication
+      const addressParts = [];
+      for (const comp of components) {
+        if (comp.types.includes('street_number') || 
+            comp.types.includes('route') ||
+            comp.types.includes('sublocality') ||
+            comp.types.includes('sublocality_level_1') ||
+            comp.types.includes('sublocality_level_2') ||
+            comp.types.includes('neighborhood')) {
+          addressParts.push(comp.long_name);
+        }
+      }
+      
+      streetAddress = addressParts.length > 0 ? addressParts.join(', ') : place.formatted_address.split(',')[0];
+      
+      setEAddress(streetAddress);
       if (cityVal) setECity(cityVal);
       if (stateVal) setEState(stateVal);
       if (pinVal) setEPin(pinVal);
@@ -337,7 +367,7 @@ export default function CustomersPage() {
     setListError(null);
     try {
       const token = localStorage.getItem("dc_access") || "";
-      const url = new URL(`${base}v1/customers`);
+      const url = new URL(`${base}customers`);
       if (search) url.searchParams.set("q", search);
       const pg = pageArg ?? page; const sz = sizeArg ?? pageSize;
       url.searchParams.set("limit", String(sz));
@@ -389,7 +419,7 @@ export default function CustomersPage() {
         pin: pin || undefined,
         notes: notes || undefined,
       };
-      const res = await fetch(`${base}v1/customers`, withTenantHeaders({
+      const res = await fetch(`${base}customers`, withTenantHeaders({
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify(payload),
@@ -489,7 +519,7 @@ export default function CustomersPage() {
         pin: ePin || undefined,
         notes: eNotes || undefined,
       };
-      const res = await fetch(`${base}v1/customers/${editCustomer.customer_id}`, withTenantHeaders({
+      const res = await fetch(`${base}customers/${editCustomer.customer_id}`, withTenantHeaders({
         method: "PUT",
         headers: {"Content-Type": "application/json", Authorization: `Bearer ${token}`},
         body: JSON.stringify(payload)
@@ -974,7 +1004,7 @@ export default function CustomersPage() {
                   setDelLoading(true);
                   try {
                     const token = localStorage.getItem("dc_access") || "";
-                    const res = await fetch(`${base}v1/customers/${delCustomer.customer_id}`, withTenantHeaders({ method: "DELETE", headers: { Authorization: `Bearer ${token}` } }));
+                    const res = await fetch(`${base}customers/${delCustomer.customer_id}`, withTenantHeaders({ method: "DELETE", headers: { Authorization: `Bearer ${token}` } }));
                     if (!res.ok) {
                       const d = await res.json().catch(() => ({}));
                       throw new Error(d.detail || `HTTP ${res.status}`);

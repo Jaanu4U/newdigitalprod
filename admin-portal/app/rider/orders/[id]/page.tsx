@@ -93,7 +93,7 @@ export default function RiderOrderDetailPage({ params }: { params: { id: string 
         const base = apiBase();
         
         const res = await fetch(
-          `${base}v1/rider/orders/${params.id}`,
+          `${base}rider/orders/${params.id}`,
           withTenantHeaders({
             headers: { Authorization: `Bearer ${token}` }
           })
@@ -231,7 +231,7 @@ export default function RiderOrderDetailPage({ params }: { params: { id: string 
       const base = apiBase();
       
       await fetch(
-        `${base}v1/rider/update-location`,
+        `${base}rider/update-location`,
         withTenantHeaders({
           method: 'POST',
           headers: {
@@ -275,7 +275,7 @@ export default function RiderOrderDetailPage({ params }: { params: { id: string 
       const base = apiBase();
 
       const res = await fetch(
-        `${base}v1/rider/accept-order`,
+        `${base}rider/accept-order`,
         withTenantHeaders({
           method: 'POST',
           headers: {
@@ -293,7 +293,7 @@ export default function RiderOrderDetailPage({ params }: { params: { id: string 
         alert('Delivery order accepted! You can now start the delivery.');
         // Refresh order data
         const detailRes = await fetch(
-          `${base}v1/rider/orders/${params.id}`,
+          `${base}rider/orders/${params.id}`,
           withTenantHeaders({
             headers: { Authorization: `Bearer ${token}` }
           })
@@ -326,7 +326,7 @@ export default function RiderOrderDetailPage({ params }: { params: { id: string 
       const base = apiBase();
 
       const res = await fetch(
-        `${base}v1/rider/reject-order`,
+        `${base}rider/reject-order`,
         withTenantHeaders({
           method: 'POST',
           headers: {
@@ -365,7 +365,7 @@ export default function RiderOrderDetailPage({ params }: { params: { id: string 
       const base = apiBase();
 
       const res = await fetch(
-        `${base}v1/rider/start-delivery`,
+        `${base}rider/start-delivery`,
         withTenantHeaders({
           method: 'POST',
           headers: {
@@ -518,7 +518,7 @@ export default function RiderOrderDetailPage({ params }: { params: { id: string 
       console.log('Sending complete delivery payload:', JSON.stringify(payload, null, 2));
 
       const res = await fetch(
-        `${base}v1/rider/complete-delivery`,
+        `${base}rider/complete-delivery`,
         withTenantHeaders({
           method: 'POST',
           headers: {

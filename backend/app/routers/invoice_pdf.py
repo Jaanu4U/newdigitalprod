@@ -185,14 +185,14 @@ class InvoiceJSONOut:
 
 # Define specific routes BEFORE catch-all {customer_id} routes to avoid conflicts
 @router.get('/invoice/drafts', response_model=Dict[str, Any])
-def list_invoice_drafts(request: Request, principal: CurrentPrincipal = Depends(get_current_principal), db: Session = Depends(get_db), limit: int = 50):
+def list_invoice_drafts(request: Request, principal: CurrentPrincipal = Depends(get_current_principal), db: Session = Depends(get_db), limit: int = 200):
     """List recently saved invoice drafts (lightweight) for Orders/Billing roles.
     Returns parsed payloads sorted by newest first.
     """
     if not _role_can_invoice(principal.role or ''):
         raise HTTPException(status_code=403, detail='Not permitted to list invoice drafts')
     org = _collect_org(db, principal, request)
-    q = db.query(models.SyncLog).filter(models.SyncLog.org_id == org.org_id, models.SyncLog.type == 'invoice_draft').order_by(models.SyncLog.created_at.desc()).limit(min(limit, 200))
+    q = db.query(models.SyncLog).filter(models.SyncLog.org_id == org.org_id, models.SyncLog.type == 'invoice_draft').order_by(models.SyncLog.created_at.desc()).limit(min(limit, 500))
     rows = q.all()
     import json as _json
     

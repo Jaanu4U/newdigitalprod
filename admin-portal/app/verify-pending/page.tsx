@@ -35,7 +35,7 @@ function VerifyPendingContent() {
     setError(null);
     
     try {
-      const res = await fetch(`${apiBase()}v1/org/resend-verification?email=${encodeURIComponent(email)}`, {
+      const res = await fetch(`${apiBase()}org/resend-verification?email=${encodeURIComponent(email)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' }
       });

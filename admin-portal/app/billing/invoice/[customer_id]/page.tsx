@@ -79,8 +79,14 @@ export default function InvoicePreviewPage() {
 
   // helpers
   const oneLine = (str: string) => (str || "").replace(/\s*\n\s*/g, ", ").replace(/\s{2,}/g, " ").replace(/,\s*,/g, ", ").trim();
-  const addrOneLine = (addr?: string | null, city?: string | null, state?: string | null, pin?: string | null) =>
-    oneLine([addr || "", [city, state, pin].filter(Boolean).join(", ")].filter(Boolean).join(", "));
+  const addrOneLine = (addr?: string | null, city?: string | null, state?: string | null, pin?: string | null) => {
+    // If address already contains commas, it's likely a combined address from CSV upload
+    if (addr && addr.includes(',')) {
+      return oneLine(addr);
+    }
+    // Otherwise, combine address components
+    return oneLine([addr || "", [city, state, pin].filter(Boolean).join(", ")].filter(Boolean).join(", "));
+  };
 
   const canBilling = (r: string | null) => {
     const rl = (r || "").toLowerCase();
@@ -94,7 +100,7 @@ export default function InvoicePreviewPage() {
     // Public share mode
     if (share) {
       (async () => {
-        const res = await fetch(`${base}v1/invoice/share?token=${encodeURIComponent(share)}`, { cache: "no-store" });
+        const res = await fetch(`${base}invoice/share?token=${encodeURIComponent(share)}`, { cache: "no-store" });
         if (!res.ok) return; // keep loading if invalid
         const data = await res.json();
         setOrg({ name: data.org?.name, business_settings: data.org?.business_settings });
@@ -128,7 +134,7 @@ export default function InvoicePreviewPage() {
       
       if (invoiceIdParam) {
         try {
-          const shipmentUrl = `${base}v1/invoice/shipment/${invoiceIdParam}`;
+          const shipmentUrl = `${base}invoice/shipment/${invoiceIdParam}`;
           console.log('Fetching shipment from:', shipmentUrl);
           const shipRes = await fetch(
             shipmentUrl,
@@ -155,7 +161,7 @@ export default function InvoicePreviewPage() {
       }
       
       // Then load customer data
-      const resC = await fetch(`${base}v1/customers/${cid}`, withTenantHeaders({ headers: { Authorization: `Bearer ${token}` } }));
+      const resC = await fetch(`${base}customers/${cid}`, withTenantHeaders({ headers: { Authorization: `Bearer ${token}` } }));
       if (resC.ok) {
         const data = await resC.json();
         setCust(data);
@@ -179,7 +185,7 @@ export default function InvoicePreviewPage() {
           console.log('Skipping customer default because shipment address exists');
         }
       }
-      const resO = await fetch(`${base}v1/org/settings`, withTenantHeaders({ headers: { Authorization: `Bearer ${token}` } }));
+      const resO = await fetch(`${base}org/settings`, withTenantHeaders({ headers: { Authorization: `Bearer ${token}` } }));
       if (resO.ok) setOrg(await resO.json());
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -197,7 +203,7 @@ export default function InvoicePreviewPage() {
       try {
         const token = localStorage.getItem("dc_access") || "";
         // Build URL with invoice_id if present in query params
-        const url = new URL(`${base}v1/invoice/${cust.customer_id}`, window.location.origin);
+        const url = new URL(`${base}invoice/${cust.customer_id}`, window.location.origin);
         const invoiceIdParam = searchParams.get("invoice_id");
         if (invoiceIdParam) {
           url.searchParams.set("invoice_id", invoiceIdParam);
@@ -250,7 +256,7 @@ export default function InvoicePreviewPage() {
         const token = localStorage.getItem("dc_access") || "";
         console.log('Fetching shipment data for invoice:', invoiceIdParam);
         const res = await fetch(
-          `${base}v1/invoice/shipment/${invoiceIdParam}`,
+          `${base}invoice/shipment/${invoiceIdParam}`,
           withTenantHeaders({ headers: { Authorization: `Bearer ${token}` } })
         );
         console.log('Shipment response status:', res.status);
@@ -287,7 +293,7 @@ export default function InvoicePreviewPage() {
       try {
         const token = localStorage.getItem('dc_access') || '';
         if (!token) return;
-        const res = await fetch(`${base}v1/org/users`, withTenantHeaders({ headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' }));
+        const res = await fetch(`${base}org/users`, withTenantHeaders({ headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' }));
         if (!res.ok) return;
         const data = await res.json();
         const ridersOnly = (Array.isArray(data) ? data : []).filter((u: any) => (u.role || '').toLowerCase() === 'rider');
@@ -305,7 +311,7 @@ export default function InvoicePreviewPage() {
       try {
         const token = localStorage.getItem('dc_access') || '';
         if (!token) { setTimeline([]); return; }
-        const res = await fetch(`${base}v1/invoice/${cust.customer_id}/timeline`, withTenantHeaders({ headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' }));
+        const res = await fetch(`${base}invoice/${cust.customer_id}/timeline`, withTenantHeaders({ headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' }));
         if (!res.ok) {
           const d = await res.json().catch(()=>({}));
           setTimelineErr(d.detail || `HTTP ${res.status}`);
@@ -785,7 +791,7 @@ export default function InvoicePreviewPage() {
                           
                           if (deliveryAddr) {
                             try {
-                              const geoRes = await fetch(`${base}v1/org/geocode?address=${encodeURIComponent(deliveryAddr)}`, withTenantHeaders({
+                              const geoRes = await fetch(`${base}org/geocode?address=${encodeURIComponent(deliveryAddr)}`, withTenantHeaders({
                                 headers: { Authorization: `Bearer ${token}` }
                               }));
                               if (geoRes.ok) {
@@ -810,7 +816,7 @@ export default function InvoicePreviewPage() {
                             delivery_latitude: deliveryLat,
                             delivery_longitude: deliveryLng,
                           };
-                          const res = await fetch(`${base}v1/invoice/${cust.customer_id}/save`, withTenantHeaders({
+                          const res = await fetch(`${base}invoice/${cust.customer_id}/save`, withTenantHeaders({
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
                             body: JSON.stringify(payload)
@@ -870,7 +876,7 @@ export default function InvoicePreviewPage() {
                           
                           if (deliveryAddr) {
                             try {
-                              const geoRes = await fetch(`${base}v1/org/geocode?address=${encodeURIComponent(deliveryAddr)}`, withTenantHeaders({
+                              const geoRes = await fetch(`${base}org/geocode?address=${encodeURIComponent(deliveryAddr)}`, withTenantHeaders({
                                 headers: { Authorization: `Bearer ${token}` }
                               }));
                               if (geoRes.ok) {
@@ -895,7 +901,7 @@ export default function InvoicePreviewPage() {
                             delivery_longitude: deliveryLng,
                             // Don't send invoice_no - let backend generate a new unique one
                           };
-                          const res = await fetch(`${base}v1/invoice/${cust.customer_id}/save`, withTenantHeaders({
+                          const res = await fetch(`${base}invoice/${cust.customer_id}/save`, withTenantHeaders({
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
                             body: JSON.stringify(payload)
@@ -1024,7 +1030,7 @@ export default function InvoicePreviewPage() {
                   setRiderAssignMsg(null); setRiderAssignErr(null); setAssigningRider(true);
                   try {
                     const token = localStorage.getItem('dc_access') || '';
-                    const res = await fetch(`${base}v1/invoice/${cust.customer_id}/assign-rider`, withTenantHeaders({
+                    const res = await fetch(`${base}invoice/${cust.customer_id}/assign-rider`, withTenantHeaders({
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
                       body: JSON.stringify({ rider_user_id: selectedRider })
@@ -1068,7 +1074,7 @@ export default function InvoicePreviewPage() {
                     const list = emailList.split(/[\s,]+/).map(s=>s.trim()).filter(Boolean);
                     if (!list.length) { setEmailErr('Enter at least one email'); setEmailing(false); return; }
                     const token = localStorage.getItem('dc_access') || '';
-                    const emailUrl = new URL(`${base}v1/invoice/${cust.customer_id}/email`, window.location.origin);
+                    const emailUrl = new URL(`${base}invoice/${cust.customer_id}/email`, window.location.origin);
                     const invoiceIdParam = searchParams.get("invoice_id");
                     if (invoiceIdParam) {
                       emailUrl.searchParams.set("invoice_id", invoiceIdParam);
@@ -1154,7 +1160,7 @@ export default function InvoicePreviewPage() {
               <button onClick={async ()=>{
                 try {
                   const token = localStorage.getItem('dc_access') || '';
-                  const res = await fetch(`${base}v1/invoice/${cust.customer_id}/pdf`, withTenantHeaders({ headers: { Authorization: `Bearer ${token}` } }));
+                  const res = await fetch(`${base}invoice/${cust.customer_id}/pdf`, withTenantHeaders({ headers: { Authorization: `Bearer ${token}` } }));
                   if(res.ok){
                     const blob = await res.blob(); const url = URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=`${effectiveInvoiceNo||'invoice'}.pdf`; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),2000);
                   }
@@ -1201,7 +1207,7 @@ export default function InvoicePreviewPage() {
                       setTimelineLoading(true); setTimelineErr(null);
                       try {
                         const token = localStorage.getItem('dc_access') || '';
-                        const res = await fetch(`${base}v1/invoice/${cust.customer_id}/timeline`, withTenantHeaders({ headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' }));
+                        const res = await fetch(`${base}invoice/${cust.customer_id}/timeline`, withTenantHeaders({ headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' }));
                         if (!res.ok) { const d = await res.json().catch(()=>({})); throw new Error(d.detail || `HTTP ${res.status}`); }
                         const data = await res.json();
                         setTimeline(Array.isArray(data.timeline) ? data.timeline : []);
@@ -1259,7 +1265,7 @@ function ShareControls({ customerId, invoiceNo }: { customerId: string; invoiceN
   const genShare = async () => {
     setErr(null); setOk(null);
     const token = localStorage.getItem("dc_access") || "";
-    const res = await fetch(`${base}v1/invoice/share`, withTenantHeaders({
+    const res = await fetch(`${base}invoice/share`, withTenantHeaders({
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
       body: JSON.stringify({ customer_id: customerId, invoice_no: invoiceNo || null, ttl_hours: 168 }),
@@ -1276,7 +1282,7 @@ function ShareControls({ customerId, invoiceNo }: { customerId: string; invoiceN
       const list = emails.split(/[,\s]+/).map(s => s.trim()).filter(Boolean);
       if (!list.length) { setErr("Enter at least one email"); setSending(false); return; }
       const token = localStorage.getItem("dc_access") || "";
-      const res = await fetch(`${base}v1/invoice/email`, withTenantHeaders({
+      const res = await fetch(`${base}invoice/email`, withTenantHeaders({
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({ customer_id: customerId, recipients: list, ttl_hours: 168 }),

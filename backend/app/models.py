@@ -118,6 +118,18 @@ class SyncLog(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class ColumnMappingTemplate(Base):
+    __tablename__ = "column_mapping_templates"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    org_id = Column(String, index=True, nullable=False)
+    user_id = Column(String, nullable=False)
+    name = Column(String, nullable=False)
+    column_mapping = Column(JSON, nullable=False)
+    address_parts = Column(JSON, nullable=True)  # {part1, part2, part3}
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 # Platform-wide settings (single row table)
 class PlatformSettings(Base):
     __tablename__ = "platform_settings"

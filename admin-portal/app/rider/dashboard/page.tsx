@@ -41,7 +41,7 @@ export default function RiderDashboard() {
         }
 
         const base = apiBase();
-        const url = `${base}v1/rider/assigned-orders`;
+        const url = `${base}rider/assigned-orders`;
         console.log('[DEBUG] Fetching orders from:', url);
         
         const res = await fetch(

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiBase } from "@/lib/api";
 import { getTenantSlugFromHost, withTenantHeaders } from "@/lib/tenant";
-import { User, KeyRound, Loader2, Building, Save, AlertCircle, Crosshair, MapPin, Package, MessageCircle, Briefcase, CreditCard, Mail } from "lucide-react";
+import { User, KeyRound, Loader2, Building, Save, AlertCircle, Crosshair, MapPin, Package, MessageCircle, Briefcase, CreditCard, Mail, ChevronDown, ChevronUp } from "lucide-react";
 import PageHeader from "@/components/PageHeader";
 import { REGIONS, TIMEZONES, detectBrowserTimeZone } from "@/lib/constants";
 
@@ -146,6 +146,17 @@ export default function SettingsPage() {
   const [whatsapp, setWhatsApp] = useState<WhatsAppSettings>({ enabled: false, accounts: [] });
   const [availableProviders, setAvailableProviders] = useState<Array<{code: string, name: string}>>([]);
 
+  // Collapsible section states - all default to false (hidden)
+  const [showUserProfile, setShowUserProfile] = useState(false);
+  const [showChangePassword, setShowChangePassword] = useState(false);
+  const [showOrgSettings, setShowOrgSettings] = useState(false);
+  const [showUpiSettings, setShowUpiSettings] = useState(false);
+  const [showEmailSettings, setShowEmailSettings] = useState(false);
+  const [showMapsSettings, setShowMapsSettings] = useState(false);
+  const [showBusinessSettings, setShowBusinessSettings] = useState(false);
+  const [showProvidersSettings, setShowProvidersSettings] = useState(false);
+  const [showWhatsAppSettings, setShowWhatsAppSettings] = useState(false);
+
   const base = useMemo(() => apiBase(), []);
 
   const isPrivileged = (r: string | null) => {
@@ -178,7 +189,7 @@ export default function SettingsPage() {
 
   const fetchAvailableProviders = async (accessToken: string) => {
     try {
-      const res = await fetch(`${base}v1/providers`, withTenantHeaders({
+      const res = await fetch(`${base}providers`, withTenantHeaders({
         headers: { Authorization: `Bearer ${accessToken}` },
       }));
       if (res.ok) {
@@ -196,7 +207,7 @@ export default function SettingsPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${base}v1/me`, withTenantHeaders({
+      const res = await fetch(`${base}me`, withTenantHeaders({
         headers: { Authorization: `Bearer ${accessToken}` },
       }));
       if (res.status === 401) {
@@ -218,7 +229,7 @@ export default function SettingsPage() {
   const fetchOrgSettings = async (accessToken: string) => {
     setError(null);
     try {
-      const res = await fetch(`${base}v1/org/settings`, withTenantHeaders({
+      const res = await fetch(`${base}org/settings`, withTenantHeaders({
         cache: "no-store",
         headers: { Authorization: `Bearer ${accessToken}` },
       }));
@@ -288,7 +299,7 @@ export default function SettingsPage() {
     setError(null);
     setSuccess(null);
     try {
-      const res = await fetch(`${base}v1/me`, withTenantHeaders({
+      const res = await fetch(`${base}me`, withTenantHeaders({
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
@@ -320,7 +331,7 @@ export default function SettingsPage() {
     setError(null);
     setSuccess(null);
     try {
-      const res = await fetch(`${base}v1/me/password`, withTenantHeaders({
+      const res = await fetch(`${base}me/password`, withTenantHeaders({
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
@@ -345,7 +356,7 @@ export default function SettingsPage() {
   };
 
   const putOrgSettings = async (body: any) => {
-    const res = await fetch(`${base}v1/org/settings`, withTenantHeaders({
+    const res = await fetch(`${base}org/settings`, withTenantHeaders({
       method: "PUT",
       headers: {
         "Content-Type": "application/json",
@@ -531,18 +542,26 @@ export default function SettingsPage() {
         )}
 
         {/* User Profile Section */}
-        <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-6 mb-6">
-          <div className="flex items-center gap-3 mb-6">
-            <div className="h-10 w-10 rounded-full bg-brand-600 flex items-center justify-center">
-              <User size={20} className="text-white" />
+        <div className="bg-white rounded-lg border border-gray-200 shadow-sm mb-6">
+          <button
+            type="button"
+            onClick={() => setShowUserProfile(!showUserProfile)}
+            className="w-full flex items-center justify-between p-6 hover:bg-gray-50 transition-colors text-left"
+          >
+            <div className="flex items-center gap-3 flex-1">
+              <div className="h-10 w-10 rounded-full bg-brand-600 flex items-center justify-center">
+                <User size={20} className="text-white" />
+              </div>
+              <div className="text-left">
+                <h2 className="text-lg font-semibold text-gray-900">User Profile</h2>
+                <p className="text-sm text-gray-500">Manage your personal information</p>
+              </div>
             </div>
-            <div>
-              <h2 className="text-lg font-semibold text-gray-900">User Profile</h2>
-              <p className="text-sm text-gray-500">Manage your personal information</p>
-            </div>
-          </div>
+            {showUserProfile ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
+          </button>
           
-          <form onSubmit={saveProfile} className="space-y-4">
+          {showUserProfile && (
+            <form onSubmit={saveProfile} className="space-y-4 px-6 pb-6 border-t">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
@@ -582,21 +601,30 @@ export default function SettingsPage() {
               </button>
             </div>
           </form>
+          )}
         </div>
 
         {/* Change Password Section */}
-        <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-6 mb-6">
-          <div className="flex items-center gap-3 mb-6">
-            <div className="h-10 w-10 rounded-full bg-gray-700 flex items-center justify-center">
-              <KeyRound size={20} className="text-white" />
+        <div className="bg-white rounded-lg border border-gray-200 shadow-sm mb-6">
+          <button
+            type="button"
+            onClick={() => setShowChangePassword(!showChangePassword)}
+            className="w-full flex items-center justify-between p-6 hover:bg-gray-50 transition-colors text-left"
+          >
+            <div className="flex items-center gap-3 flex-1">
+              <div className="h-10 w-10 rounded-full bg-gray-700 flex items-center justify-center">
+                <KeyRound size={20} className="text-white" />
+              </div>
+              <div className="text-left">
+                <h2 className="text-lg font-semibold text-gray-900">Change Password</h2>
+                <p className="text-sm text-gray-500">Update your password to keep your account secure</p>
+              </div>
             </div>
-            <div>
-              <h2 className="text-lg font-semibold text-gray-900">Change Password</h2>
-              <p className="text-sm text-gray-500">Update your password to keep your account secure</p>
-            </div>
-          </div>
+            {showChangePassword ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
+          </button>
           
-          <form onSubmit={changePassword} className="space-y-4">
+          {showChangePassword && (
+            <form onSubmit={changePassword} className="space-y-4 px-6 pb-6 border-t">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Current Password</label>
               <input
@@ -651,23 +679,33 @@ export default function SettingsPage() {
               </button>
             </div>
           </form>
+          )}
         </div>
 
         {/* Organization Settings - Only show for tenant users with privileged role */}
         {slug && isPrivileged(role) && orgSettings && (
           <>
-            <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-6 mb-6">
-              <div className="flex items-center gap-3 mb-6">
-                <div className="h-10 w-10 rounded-full bg-blue-600 flex items-center justify-center">
-                  <Building size={20} className="text-white" />
+            <div className="bg-white rounded-lg border border-gray-200 shadow-sm mb-6">
+              <button
+                type="button"
+                onClick={() => setShowOrgSettings(!showOrgSettings)}
+                className="w-full flex items-center justify-between p-6 hover:bg-gray-50 transition-colors text-left"
+              >
+                <div className="flex items-center gap-3 flex-1">
+                  <div className="h-10 w-10 rounded-full bg-blue-600 flex items-center justify-center">
+                    <Building size={20} className="text-white" />
+                  </div>
+                  <div className="text-left">
+                    <h2 className="text-lg font-semibold text-gray-900">Organization Settings</h2>
+                    <p className="text-sm text-gray-500">Manage your organization configuration</p>
+                  </div>
                 </div>
-                <div>
-                  <h2 className="text-lg font-semibold text-gray-900">Organization Settings</h2>
-                  <p className="text-sm text-gray-500">Manage your organization configuration</p>
-                </div>
-              </div>
+                {showOrgSettings ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
+              </button>
               
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {showOrgSettings && (
+              <div className="px-6 pb-6 border-t">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-6">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Organization Name</label>
                   <input
@@ -825,20 +863,37 @@ export default function SettingsPage() {
                   )}
                 </button>
               </div>
+              </div>
+              )}
             </div>
 
             {/* UPI Settings */}
-            <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-6 mb-6">
-              <div className="flex items-center gap-3 mb-6">
-                <div className="h-10 w-10 rounded-full bg-orange-600 flex items-center justify-center">
-                  <CreditCard size={20} className="text-white" />
+            <div className="bg-white rounded-lg border border-gray-200 shadow-sm mb-6">
+              <button
+                type="button"
+                onClick={() => setShowUpiSettings(!showUpiSettings)}
+                className="w-full flex items-center justify-between p-6 hover:bg-gray-50 transition-colors text-left"
+              >
+                <div className="flex items-center gap-3 flex-1">
+                  <div className="h-10 w-10 rounded-full bg-orange-600 flex items-center justify-center">
+                    <CreditCard size={20} className="text-white" />
+                  </div>
+                  <div className="text-left flex-1">
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-lg font-semibold text-gray-900">UPI QR Code Settings</h3>
+                      <span className={`px-2 py-1 text-xs font-medium rounded-full ${pay.upi?.merchant_vpa ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>
+                        {pay.upi?.merchant_vpa ? 'Configured' : 'Not Configured'}
+                      </span>
+                    </div>
+                    <p className="text-sm text-gray-500">Configure merchant UPI details for QR code payments</p>
+                  </div>
                 </div>
-                <div>
-                  <h3 className="text-lg font-semibold text-gray-900">UPI QR Code Settings</h3>
-                  <p className="text-sm text-gray-500">Configure merchant UPI details for QR code payments</p>
-                </div>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {showUpiSettings ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
+              </button>
+              
+              {showUpiSettings && (
+              <div className="px-6 pb-6 border-t">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-6">
                 <div className="md:col-span-2">
                   <label className="block text-sm font-medium text-gray-700 mb-1">
                     Merchant UPI Address (VPA) <span className="text-red-500">*</span>
@@ -913,20 +968,36 @@ export default function SettingsPage() {
                   )}
                 </button>
               </div>
-            </div>
+              </div>
+              )}\n            </div>
 
             {/* Email Settings */}
-            <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-6 mb-6">
-              <div className="flex items-center gap-3 mb-6">
-                <div className="h-10 w-10 rounded-full bg-blue-600 flex items-center justify-center">
-                  <Mail size={20} className="text-white" />
+            <div className="bg-white rounded-lg border border-gray-200 shadow-sm mb-6">
+              <button
+                type="button"
+                onClick={() => setShowEmailSettings(!showEmailSettings)}
+                className="w-full flex items-center justify-between p-6 hover:bg-gray-50 transition-colors text-left"
+              >
+                <div className="flex items-center gap-3 flex-1">
+                  <div className="h-10 w-10 rounded-full bg-blue-600 flex items-center justify-center">
+                    <Mail size={20} className="text-white" />
+                  </div>
+                  <div className="text-left flex-1">
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-lg font-semibold text-gray-900">Email Settings</h3>
+                      <span className={`px-2 py-1 text-xs font-medium rounded-full ${email.enabled && email.smtp_host ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>
+                        {email.enabled && email.smtp_host ? 'Configured' : 'Not Configured'}
+                      </span>
+                    </div>
+                    <p className="text-sm text-gray-500">Configure SMTP or email service provider</p>
+                  </div>
                 </div>
-                <div>
-                  <h3 className="text-lg font-semibold text-gray-900">Email Settings</h3>
-                  <p className="text-sm text-gray-500">Configure SMTP or email service provider</p>
-                </div>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {showEmailSettings ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
+              </button>
+              
+              {showEmailSettings && (
+              <div className="px-6 pb-6 border-t">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-6">
                 <label className="inline-flex items-center gap-2 text-sm text-gray-700">
                   <input type="checkbox" checked={!!email.enabled} onChange={(e) => setEmail({ ...email, enabled: e.target.checked })} />
                   Enable email
@@ -978,20 +1049,37 @@ export default function SettingsPage() {
                   )}
                 </button>
               </div>
+              </div>
+              )}
             </div>
 
             {/* Maps Settings */}
-            <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-6 mb-6">
-              <div className="flex items-center gap-3 mb-6">
-                <div className="h-10 w-10 rounded-full bg-green-600 flex items-center justify-center">
-                  <MapPin size={20} className="text-white" />
+            <div className="bg-white rounded-lg border border-gray-200 shadow-sm mb-6">
+              <button
+                type="button"
+                onClick={() => setShowMapsSettings(!showMapsSettings)}
+                className="w-full flex items-center justify-between p-6 hover:bg-gray-50 transition-colors text-left"
+              >
+                <div className="flex items-center gap-3 flex-1">
+                  <div className="h-10 w-10 rounded-full bg-green-600 flex items-center justify-center">
+                    <MapPin size={20} className="text-white" />
+                  </div>
+                  <div className="text-left flex-1">
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-lg font-semibold text-gray-900">Google Maps Settings</h3>
+                      <span className={`px-2 py-1 text-xs font-medium rounded-full ${(maps as any).google_api_key_present || maps.google_api_key ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>
+                        {(maps as any).google_api_key_present || maps.google_api_key ? 'Configured' : 'Not Configured'}
+                      </span>
+                    </div>
+                    <p className="text-sm text-gray-500">Configure maps and location services</p>
+                  </div>
                 </div>
-                <div>
-                  <h3 className="text-lg font-semibold text-gray-900">Google Maps Settings</h3>
-                  <p className="text-sm text-gray-500">Configure maps and location services</p>
-                </div>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {showMapsSettings ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
+              </button>
+              
+              {showMapsSettings && (
+              <div className="px-6 pb-6 border-t">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-6">
                 <label className="inline-flex items-center gap-2 text-sm text-gray-700">
                   <input type="checkbox" checked={!!maps.enabled} onChange={(e) => setMaps({ ...maps, enabled: e.target.checked })} />
                   Enable Maps
@@ -1056,20 +1144,37 @@ export default function SettingsPage() {
                   )}
                 </button>
               </div>
+              </div>
+              )}
             </div>
 
             {/* Business Settings */}
-            <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-6 mb-6">
-              <div className="flex items-center gap-3 mb-6">
-                <div className="h-10 w-10 rounded-full bg-emerald-600 flex items-center justify-center">
-                  <Briefcase size={20} className="text-white" />
+            <div className="bg-white rounded-lg border border-gray-200 shadow-sm mb-6">
+              <button
+                type="button"
+                onClick={() => setShowBusinessSettings(!showBusinessSettings)}
+                className="w-full flex items-center justify-between p-6 hover:bg-gray-50 transition-colors text-left"
+              >
+                <div className="flex items-center gap-3 flex-1">
+                  <div className="h-10 w-10 rounded-full bg-emerald-600 flex items-center justify-center">
+                    <Briefcase size={20} className="text-white" />
+                  </div>
+                  <div className="text-left flex-1">
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-lg font-semibold text-gray-900">Business Information</h3>
+                      <span className={`px-2 py-1 text-xs font-medium rounded-full ${business.gstin || business.company_registration ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>
+                        {business.gstin || business.company_registration ? 'Configured' : 'Not Configured'}
+                      </span>
+                    </div>
+                    <p className="text-sm text-gray-500">Company registration and compliance details</p>
+                  </div>
                 </div>
-                <div className="flex-1">
-                  <h3 className="text-lg font-semibold text-gray-900">Business Information</h3>
-                  <p className="text-sm text-gray-500">Company registration and compliance details</p>
-                </div>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {showBusinessSettings ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
+              </button>
+              
+              {showBusinessSettings && (
+              <div className="px-6 pb-6 border-t">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-6">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">GSTIN</label>
                   <input
@@ -1115,19 +1220,36 @@ export default function SettingsPage() {
                   <Save size={16} /> Save Changes
                 </button>
               </div>
+              </div>
+              )}
             </div>
 
             {/* Shipping Providers */}
-            <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-6 mb-6">
-              <div className="flex items-center gap-3 mb-6">
-                <div className="h-10 w-10 rounded-full bg-orange-600 flex items-center justify-center">
-                  <Package size={20} className="text-white" />
+            <div className="bg-white rounded-lg border border-gray-200 shadow-sm mb-6">
+              <button
+                type="button"
+                onClick={() => setShowProvidersSettings(!showProvidersSettings)}
+                className="w-full flex items-center justify-between p-6 hover:bg-gray-50 transition-colors text-left"
+              >
+                <div className="flex items-center gap-3 flex-1">
+                  <div className="h-10 w-10 rounded-full bg-orange-600 flex items-center justify-center">
+                    <Package size={20} className="text-white" />
+                  </div>
+                  <div className="text-left flex-1">
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-lg font-semibold text-gray-900">Shipping Providers</h3>
+                      <span className={`px-2 py-1 text-xs font-medium rounded-full ${providers.enabled_provider_codes && providers.enabled_provider_codes.length > 0 ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>
+                        {providers.enabled_provider_codes && providers.enabled_provider_codes.length > 0 ? 'Configured' : 'Not Configured'}
+                      </span>
+                    </div>
+                    <p className="text-sm text-gray-500">Configure courier and delivery partners</p>
+                  </div>
                 </div>
-                <div className="flex-1">
-                  <h3 className="text-lg font-semibold text-gray-900">Shipping Providers</h3>
-                  <p className="text-sm text-gray-500">Configure courier and delivery partners</p>
-                </div>
-              </div>
+                {showProvidersSettings ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
+              </button>
+              
+              {showProvidersSettings && (
+              <div className="px-6 pb-6 border-t pt-6">
               {availableProviders.length === 0 ? (
                 <div className="text-sm text-gray-500">Loading providers...</div>
               ) : (
@@ -1178,20 +1300,37 @@ export default function SettingsPage() {
                   <Save size={16} /> Save Changes
                 </button>
               </div>
+              </div>
+              )}
             </div>
 
             {/* WhatsApp Settings */}
-            <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-6 mb-6">
-              <div className="flex items-center gap-3 mb-6">
-                <div className="h-10 w-10 rounded-full bg-green-600 flex items-center justify-center">
-                  <MessageCircle size={20} className="text-white" />
+            <div className="bg-white rounded-lg border border-gray-200 shadow-sm mb-6">
+              <button
+                type="button"
+                onClick={() => setShowWhatsAppSettings(!showWhatsAppSettings)}
+                className="w-full flex items-center justify-between p-6 hover:bg-gray-50 transition-colors text-left"
+              >
+                <div className="flex items-center gap-3 flex-1">
+                  <div className="h-10 w-10 rounded-full bg-green-600 flex items-center justify-center">
+                    <MessageCircle size={20} className="text-white" />
+                  </div>
+                  <div className="text-left flex-1">
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-lg font-semibold text-gray-900">WhatsApp Integration</h3>
+                      <span className={`px-2 py-1 text-xs font-medium rounded-full ${whatsapp.enabled && whatsapp.accounts && whatsapp.accounts.length > 0 ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>
+                        {whatsapp.enabled && whatsapp.accounts && whatsapp.accounts.length > 0 ? 'Configured' : 'Not Configured'}
+                      </span>
+                    </div>
+                    <p className="text-sm text-gray-500">Configure WhatsApp Business accounts</p>
+                  </div>
                 </div>
-                <div className="flex-1">
-                  <h3 className="text-lg font-semibold text-gray-900">WhatsApp Integration</h3>
-                  <p className="text-sm text-gray-500">Configure WhatsApp Business accounts</p>
-                </div>
-              </div>
-              <div className="space-y-4">
+                {showWhatsAppSettings ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
+              </button>
+              
+              {showWhatsAppSettings && (
+              <div className="px-6 pb-6 border-t">
+              <div className="space-y-4 pt-6">
                 <label className="inline-flex items-center gap-2 text-sm text-gray-700">
                   <input
                     type="checkbox"
@@ -1405,6 +1544,8 @@ export default function SettingsPage() {
                   <Save size={16} /> Save Changes
                 </button>
               </div>
+              </div>
+              )}
             </div>
           </>
         )}

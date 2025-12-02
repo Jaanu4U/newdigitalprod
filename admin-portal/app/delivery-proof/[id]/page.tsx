@@ -43,7 +43,7 @@ export default function DeliveryProofPage({ params }: { params: { id: string } }
         const base = apiBase();
         
         const res = await fetch(
-          `${base}v1/delivery-proof/${params.id}`,
+          `${base}delivery-proof/${params.id}`,
           withTenantHeaders({
             headers: { Authorization: `Bearer ${token}` }
           })

@@ -18,7 +18,7 @@ async function checkAvailability(slug?: string, domain?: string) {
   const params = new URLSearchParams()
   if (slug) params.set('slug', slug)
   if (domain) params.set('domain', domain)
-  const res = await fetch(`${apiBase()}v1/org/check?${params.toString()}`, { cache: 'no-store' })
+  const res = await fetch(`${apiBase()}org/check?${params.toString()}`, { cache: 'no-store' })
   if (!res.ok) return {}
   return res.json()
 }
@@ -68,7 +68,7 @@ export default function SignupPage() {
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch(`${apiBase()}v1/org/register`, {
+      const res = await fetch(`${apiBase()}org/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

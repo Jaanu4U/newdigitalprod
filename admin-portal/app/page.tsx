@@ -86,8 +86,8 @@ export default function Dashboard() {
       // Fetch in parallel
       const h = withTenantHeaders({ headers: { Authorization: `Bearer ${token}` } });
       const [orgRes, usersRes] = await Promise.all([
-        fetch(`${base}v1/org/settings`, h),
-        fetch(`${base}v1/org/users`, h),
+        fetch(`${base}org/settings`, h),
+        fetch(`${base}org/users`, h),
       ]);
       if (!orgRes.ok) throw new Error(`Org HTTP ${orgRes.status}`);
       const orgJson = await orgRes.json();

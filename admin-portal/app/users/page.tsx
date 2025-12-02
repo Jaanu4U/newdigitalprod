@@ -90,7 +90,7 @@ export default function UserManagementPage() {
   const fetchUsers = async (accessToken: string) => {
     try {
       const base = apiBase();
-      const url = `${base}v1/superadmin/users`;
+      const url = `${base}superadmin/users`;
       
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
@@ -146,7 +146,7 @@ export default function UserManagementPage() {
 
     try {
       const base = apiBase();
-      const res = await fetch(`${base}v1/superadmin/users/create`, {
+      const res = await fetch(`${base}superadmin/users/create`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -187,7 +187,7 @@ export default function UserManagementPage() {
 
     try {
       const base = apiBase();
-      const res = await fetch(`${base}v1/superadmin/users/${userId}`, {
+      const res = await fetch(`${base}superadmin/users/${userId}`, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -222,7 +222,7 @@ export default function UserManagementPage() {
 
     try {
       const base = apiBase();
-      const res = await fetch(`${base}v1/superadmin/users/${editingId}`, {
+      const res = await fetch(`${base}superadmin/users/${editingId}`, {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",

@@ -51,7 +51,7 @@ export default function SuperAdminSettingsPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${base}v1/superadmin/me`, {
+      const res = await fetch(`${base}superadmin/me`, {
         headers: { Authorization: `Bearer ${accessToken}` },
       });
       
@@ -80,7 +80,7 @@ export default function SuperAdminSettingsPage() {
     setSuccess(null);
     
     try {
-      const res = await fetch(`${base}v1/superadmin/me`, {
+      const res = await fetch(`${base}superadmin/me`, {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
@@ -128,7 +128,7 @@ export default function SuperAdminSettingsPage() {
     setSuccess(null);
     
     try {
-      const res = await fetch(`${base}v1/superadmin/me/password`, {
+      const res = await fetch(`${base}superadmin/me/password`, {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",

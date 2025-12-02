@@ -1041,8 +1041,8 @@ async def sync_locations(
             'type': 'rider_location_update',
             'data': {
                 'invoice_id': invoice_id,
-                'rider_email': principal.email,
-                'rider_name': rider.name if rider else principal.email,
+                'rider_email': principal.user_id,
+                'rider_name': rider.name if rider else principal.user_id,
                 'latitude': last_loc.get('lat'),
                 'longitude': last_loc.get('lng'),
                 'timestamp': last_loc.get('timestamp')
@@ -1111,7 +1111,7 @@ async def notify_rider_idle(
         'data': {
             'invoice_id': invoice_id,
             'invoice_no': invoice_no,
-            'rider_email': principal.email,
+            'rider_email': principal.user_id,
             'rider_name': rider_name,
             'latitude': payload.latitude,
             'longitude': payload.longitude,

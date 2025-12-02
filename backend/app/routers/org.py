@@ -36,16 +36,13 @@ def register_org(payload: schemas.OrgRegisterIn, db: Session = Depends(get_db)):
     if existing_email:
         raise HTTPException(status_code=409, detail="Email address already registered")
     
-    # Validate phone number format if provided
+    # Validate phone number format if provided (10 digits)
     if payload.admin_phone:
         phone = payload.admin_phone.strip()
-        # Must start with + and have country code
-        if not phone.startswith('+'):
-            raise HTTPException(status_code=400, detail="Phone number must include country code (e.g., +91)")
-        # Remove + and check if rest is digits
-        phone_digits = phone[1:]
-        if not phone_digits.isdigit() or len(phone_digits) < 10 or len(phone_digits) > 15:
-            raise HTTPException(status_code=400, detail="Invalid phone number format")
+        # Remove any spaces, dashes, or parentheses
+        phone_digits = ''.join(c for c in phone if c.isdigit())
+        if len(phone_digits) != 10:
+            raise HTTPException(status_code=400, detail="Phone number must be 10 digits")
     
     # Create org with access key
     access_key = secrets.token_urlsafe(24)

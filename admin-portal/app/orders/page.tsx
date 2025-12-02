@@ -4,8 +4,9 @@ import { apiBase } from "@/lib/api";
 import { withTenantHeaders, getTenantSlugFromHost } from "@/lib/tenant";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { Eye, Truck, X, Package, CheckCircle, MapPin, MessageCircle, Upload, Download, Trash2 } from "lucide-react";
+import { Eye, Truck, X, Package, CheckCircle, MapPin, MessageCircle, Upload, Download, Trash2, Edit } from "lucide-react";
 import PageHeader from "@/components/PageHeader";
+import UploadModal from "./UploadModal";
 
 interface ShipmentInfo {
   provider_name?: string;
@@ -82,13 +83,14 @@ function OrdersInner() {
   const [whatsappAccounts, setWhatsappAccounts] = useState<any[]>([]);
   const [whatsappEnabled, setWhatsappEnabled] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
-  const [uploadFile, setUploadFile] = useState<File | null>(null);
-  const [uploading, setUploading] = useState(false);
-  const [uploadReport, setUploadReport] = useState<any>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(20);
+  const [showPhoneModal, setShowPhoneModal] = useState(false);
+  const [selectedInvoiceForPhone, setSelectedInvoiceForPhone] = useState<DraftRow | null>(null);
+  const [newPhoneNumber, setNewPhoneNumber] = useState("");
+  const [updatingPhone, setUpdatingPhone] = useState(false);
   const searchParams = useSearchParams();
   const from = searchParams?.get('from');
 
@@ -102,7 +104,7 @@ function OrdersInner() {
     const fetchOrgSettings = async () => {
       try {
         const token = localStorage.getItem('dc_access') || '';
-        const res = await fetch(`${base}v1/org/settings`, withTenantHeaders({ 
+        const res = await fetch(`${base}org/settings`, withTenantHeaders({ 
           headers: { Authorization: `Bearer ${token}` } 
         }));
         if (res.ok) {
@@ -116,7 +118,7 @@ function OrdersInner() {
           setWhatsappAccounts(whatsappSettings.accounts || []);
           
           // Fetch unmasked Google Maps API key from dedicated endpoint
-          const mapsRes = await fetch(`${base}v1/org/maps-api-key`, withTenantHeaders({ 
+          const mapsRes = await fetch(`${base}org/maps-api-key`, withTenantHeaders({ 
             headers: { Authorization: `Bearer ${token}` } 
           }));
           if (mapsRes.ok) {
@@ -152,7 +154,7 @@ function OrdersInner() {
         if (!mounted) return;
         const token = typeof window !== 'undefined' ? (localStorage.getItem("dc_access") || "") : "";
         if (!token || !slug) { setLoading(false); return; }
-        const url = `${base}v1/invoice/drafts`;
+        const url = `${base}invoice/drafts`;
         const init = withTenantHeaders({ headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' });
         // eslint-disable-next-line no-console
         console.log('Fetch drafts:', url, init);
@@ -195,7 +197,7 @@ function OrdersInner() {
     setLoadingRiders(true);
     try {
       const token = localStorage.getItem('dc_access') || '';
-      const res = await fetch(`${base}v1/org/users`, withTenantHeaders({ headers: { Authorization: `Bearer ${token}` } }));
+      const res = await fetch(`${base}org/users`, withTenantHeaders({ headers: { Authorization: `Bearer ${token}` } }));
       if (!res.ok) throw new Error('Failed to load riders');
       const data = await res.json();
       const ridersList = data.filter((u: any) => (u.role || '').toLowerCase() === 'rider');
@@ -221,7 +223,7 @@ function OrdersInner() {
     try {
       const token = localStorage.getItem('dc_access') || '';
       const res = await fetch(
-        `${base}v1/invoice/${selectedInvoice.customer_id}/assign-rider`,
+        `${base}invoice/${selectedInvoice.customer_id}/assign-rider`,
         withTenantHeaders({
           method: 'POST',
           headers: { 
@@ -291,7 +293,7 @@ function OrdersInner() {
       if (order.customer_id && order.invoice_id) {
         try {
           const invoiceRes = await fetch(
-            `${base}v1/invoice/${order.customer_id}/view/${order.invoice_id}`,
+            `${base}invoice/${order.customer_id}/view/${order.invoice_id}`,
             withTenantHeaders({
               headers: { Authorization: `Bearer ${token}` }
             })
@@ -353,7 +355,7 @@ function OrdersInner() {
       message += `✅ Please confirm receipt and update delivery status.`;
 
       // Send WhatsApp message via backend
-      const res = await fetch(`${base}v1/whatsapp/send`, withTenantHeaders({
+      const res = await fetch(`${base}whatsapp/send`, withTenantHeaders({
         method: 'POST',
         headers: {
           Authorization: `Bearer ${token}`,
@@ -382,7 +384,7 @@ function OrdersInner() {
   const refreshDrafts = async () => {
     try {
       const token = localStorage.getItem('dc_access') || '';
-      const url = `${base}v1/invoice/drafts`;
+      const url = `${base}invoice/drafts`;
       const res = await fetch(url, withTenantHeaders({ 
         headers: { Authorization: `Bearer ${token}` }, 
         cache: 'no-store' 
@@ -418,7 +420,7 @@ function OrdersInner() {
     try {
       const token = localStorage.getItem('dc_access') || '';
       const res = await fetch(
-        `${base}v1/providers`,
+        `${base}providers`,
         withTenantHeaders({ headers: { Authorization: `Bearer ${token}` } })
       );
       if (res.ok) {
@@ -445,7 +447,7 @@ function OrdersInner() {
     try {
       const token = localStorage.getItem('dc_access') || '';
       const res = await fetch(
-        `${base}v1/invoice/shipment/assign`,
+        `${base}invoice/shipment/assign`,
         withTenantHeaders({
           method: 'POST',
           headers: {
@@ -479,7 +481,7 @@ function OrdersInner() {
     try {
       const token = localStorage.getItem('dc_access') || '';
       const res = await fetch(
-        `${base}v1/invoice/shipment/update`,
+        `${base}invoice/shipment/update`,
         withTenantHeaders({
           method: 'POST',
           headers: {
@@ -519,7 +521,7 @@ function OrdersInner() {
     try {
       const token = localStorage.getItem('dc_access') || '';
       const res = await fetch(
-        `${base}v1/invoice/shipment/update`,
+        `${base}invoice/shipment/update`,
         withTenantHeaders({
           method: 'POST',
           headers: {
@@ -650,7 +652,7 @@ function OrdersInner() {
       let sessionId = null;
       try {
         const sessionsRes = await fetch(
-          `${base}v1/whatsapp/sessions`,
+          `${base}whatsapp/sessions`,
           withTenantHeaders({
             headers: { Authorization: `Bearer ${token}` }
           })
@@ -684,7 +686,7 @@ function OrdersInner() {
 
       // Fetch location from WhatsApp messages
       const res = await fetch(
-        `${base}v1/whatsapp/get-location`,
+        `${base}whatsapp/get-location`,
         withTenantHeaders({
           method: 'POST',
           headers: {
@@ -746,7 +748,7 @@ function OrdersInner() {
     try {
       const token = localStorage.getItem('dc_access') || '';
       const res = await fetch(
-        `${base}v1/invoice/shipment/address`,
+        `${base}invoice/shipment/address`,
         withTenantHeaders({
           method: 'POST',
           headers: {
@@ -812,7 +814,7 @@ function OrdersInner() {
     try {
       const token = localStorage.getItem('dc_access') || '';
       const res = await fetch(
-        `${base}v1/invoice/draft/${invoiceId}`,
+        `${base}invoice/draft/${invoiceId}`,
         withTenantHeaders({
           method: 'DELETE',
           headers: { Authorization: `Bearer ${token}` }
@@ -828,6 +830,57 @@ function OrdersInner() {
     } catch (e) {
       console.error(e);
       alert('Failed to delete invoice');
+    }
+  };
+
+  const updatePhoneNumber = async () => {
+    if (!selectedInvoiceForPhone || !newPhoneNumber.trim()) {
+      alert('Please enter a phone number');
+      return;
+    }
+
+    // Validate phone number (basic validation)
+    const cleanPhone = newPhoneNumber.replace(/\D/g, '');
+    if (cleanPhone.length < 10) {
+      alert('Please enter a valid 10-digit phone number');
+      return;
+    }
+
+    setUpdatingPhone(true);
+    try {
+      const token = localStorage.getItem('dc_access') || '';
+      const res = await fetch(
+        `${base}customers/${selectedInvoiceForPhone.customer_id}/update-phone`,
+        withTenantHeaders({
+          method: 'PATCH',
+          headers: { 
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ phone: cleanPhone })
+        })
+      );
+
+      if (res.ok) {
+        // Update local state
+        setRows(prev => prev.map(r => 
+          r.customer_id === selectedInvoiceForPhone.customer_id 
+            ? { ...r, customer_phone: cleanPhone }
+            : r
+        ));
+        setShowPhoneModal(false);
+        setNewPhoneNumber('');
+        setSelectedInvoiceForPhone(null);
+        alert('Phone number updated successfully');
+      } else {
+        const error = await res.json().catch(() => ({}));
+        alert(error.detail || 'Failed to update phone number');
+      }
+    } catch (e) {
+      console.error(e);
+      alert('Failed to update phone number');
+    } finally {
+      setUpdatingPhone(false);
     }
   };
 
@@ -1043,7 +1096,22 @@ function OrdersInner() {
                     <div className="font-medium text-gray-900 truncate" title={r.customer_company_name || r.customer_name || r.customer_id || ''}>
                       {r.customer_company_name || r.customer_name || (r.customer_id ? r.customer_id.substring(0, 10) + '...' : '-')}
                     </div>
-                    {r.customer_phone && <div className="text-[10px] text-gray-500">{r.customer_phone.substring(0, 10)}</div>}
+                    {r.customer_phone && r.customer_phone !== 'nan' && r.customer_phone !== 'NaN' ? (
+                      <div className="text-[10px] text-gray-500">{r.customer_phone.substring(0, 10)}</div>
+                    ) : (
+                      <button
+                        onClick={() => {
+                          setSelectedInvoiceForPhone(r);
+                          setNewPhoneNumber('');
+                          setShowPhoneModal(true);
+                        }}
+                        className="flex items-center gap-1 text-[10px] text-orange-600 hover:text-orange-700 hover:underline"
+                        title="Add phone number"
+                      >
+                        <Edit size={10} />
+                        Add phone
+                      </button>
+                    )}
                   </td>
                   <td className="px-3 py-3">
                     {r.rider_name ? (
@@ -1642,167 +1710,72 @@ function OrdersInner() {
 
       {/* Bulk Upload Modal */}
       {showUploadModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-2xl shadow-lg border border-gray-100-xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
-            <div className="px-6 py-4 border-b flex items-center justify-between">
-              <h2 className="text-lg font-semibold">Upload Bulk Invoices</h2>
+        <UploadModal
+          base={base}
+          onClose={() => setShowUploadModal(false)}
+          onSuccess={() => window.location.reload()}
+        />
+      )}
+
+      {/* Phone Update Modal */}
+      {showPhoneModal && selectedInvoiceForPhone && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-gray-900">Update Phone Number</h3>
               <button
                 onClick={() => {
-                  setShowUploadModal(false);
-                  setUploadFile(null);
-                  setUploadReport(null);
+                  setShowPhoneModal(false);
+                  setNewPhoneNumber('');
+                  setSelectedInvoiceForPhone(null);
                 }}
                 className="text-gray-400 hover:text-gray-600"
               >
                 <X size={20} />
               </button>
             </div>
-            <div className="p-6">
-              {!uploadReport ? (
-                <>
-                  <div className="mb-4">
-                    <p className="text-sm text-gray-600 mb-2">
-                      Upload a CSV or Excel file with customer and invoice details. Multiple products for the same customer (same phone number) will be combined into one invoice.
-                    </p>
-                    <ul className="text-xs text-gray-500 list-disc list-inside space-y-1">
-                      <li><strong>customer_name</strong> - Customer full name (required)</li>
-                      <li><strong>customer_phone</strong> - Phone number, 10 digits (required, used to group products)</li>
-                      <li><strong>customer_email</strong> - Email address (optional)</li>
-                      <li><strong>customer_address</strong> - Billing address (optional)</li>
-                      <li><strong>shipping_address</strong> - Delivery/shipping address (optional, different from billing)</li>
-                      <li><strong>item_name</strong> - Product/Service name (required)</li>
-                      <li><strong>item_quantity</strong> - Quantity (required)</li>
-                      <li><strong>item_price</strong> - Price per unit (required)</li>
-                      <li><strong>tracking_number</strong> - Shipment tracking (optional)</li>
-                    </ul>
-                    <p className="text-xs text-blue-600 mt-2">
-                      💡 Tip: Add multiple rows with the same phone number to include multiple products in one invoice!
-                    </p>
-                  </div>
 
-                  <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center">
-                    <input
-                      type="file"
-                      accept=".csv,.xlsx,.xls"
-                      onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
-                      className="hidden"
-                      id="bulk-upload"
-                    />
-                    <label
-                      htmlFor="bulk-upload"
-                      className="cursor-pointer inline-flex flex-col items-center"
-                    >
-                      <Upload size={48} className="text-gray-400 mb-2" />
-                      <span className="text-sm font-medium text-gray-700">
-                        {uploadFile ? uploadFile.name : 'Click to select CSV or Excel file'}
-                      </span>
-                      <span className="text-xs text-gray-500 mt-1">
-                        Supported formats: .csv, .xlsx, .xls
-                      </span>
-                    </label>
-                  </div>
+            <div className="mb-4">
+              <p className="text-sm text-gray-600 mb-2">
+                Customer: <span className="font-medium text-gray-900">{selectedInvoiceForPhone.customer_name}</span>
+              </p>
+              <p className="text-sm text-gray-600 mb-4">
+                Invoice: <span className="font-medium text-gray-900">{selectedInvoiceForPhone.invoice_no}</span>
+              </p>
 
-                  <div className="mt-6 flex justify-end gap-3">
-                    <button
-                      onClick={() => {
-                        setShowUploadModal(false);
-                        setUploadFile(null);
-                      }}
-                      className="px-4 py-2 border rounded-md text-sm hover:bg-gray-50"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      onClick={async () => {
-                        if (!uploadFile) {
-                          alert('Please select a file');
-                          return;
-                        }
-                        setUploading(true);
-                        try {
-                          const formData = new FormData();
-                          formData.append('file', uploadFile);
-                          
-                          const token = localStorage.getItem('dc_access') || '';
-                          const res = await fetch(`${base}v1/invoices/bulk-upload`, withTenantHeaders({
-                            method: 'POST',
-                            headers: { Authorization: `Bearer ${token}` },
-                            body: formData
-                          }));
-                          
-                          if (!res.ok) {
-                            const data = await res.json().catch(() => ({}));
-                            throw new Error(data.detail || `HTTP ${res.status}`);
-                          }
-                          
-                          const result = await res.json();
-                          setUploadReport(result);
-                          // Reload page to show new invoices
-                          window.location.reload();
-                        } catch (e: any) {
-                          alert(`Upload failed: ${e.message}`);
-                        } finally {
-                          setUploading(false);
-                        }
-                      }}
-                      disabled={!uploadFile || uploading}
-                      className="px-4 py-2 bg-green-600 text-white rounded-md text-sm hover:bg-green-700 disabled:opacity-50"
-                    >
-                      {uploading ? 'Uploading...' : 'Upload & Process'}
-                    </button>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div className="mb-4">
-                    <h3 className="text-lg font-semibold text-green-600 mb-2">Upload Complete!</h3>
-                    <div className="grid grid-cols-2 gap-4 mb-4">
-                      <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-                        <div className="text-2xl font-bold text-green-600">{uploadReport.created || 0}</div>
-                        <div className="text-sm text-gray-600">Invoices Created</div>
-                      </div>
-                      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                        <div className="text-2xl font-bold text-blue-600">{uploadReport.updated || 0}</div>
-                        <div className="text-sm text-gray-600">Existing Updated</div>
-                      </div>
-                      <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
-                        <div className="text-2xl font-bold text-purple-600">{uploadReport.new_customers || 0}</div>
-                        <div className="text-sm text-gray-600">New Customers</div>
-                      </div>
-                      <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-                        <div className="text-2xl font-bold text-red-600">{uploadReport.errors?.length || 0}</div>
-                        <div className="text-sm text-gray-600">Errors</div>
-                      </div>
-                    </div>
-                    
-                    {uploadReport.errors && uploadReport.errors.length > 0 && (
-                      <div className="mt-4">
-                        <h4 className="text-sm font-semibold text-red-600 mb-2">Errors:</h4>
-                        <div className="max-h-48 overflow-y-auto bg-red-50 border border-red-200 rounded p-3">
-                          {uploadReport.errors.map((err: any, idx: number) => (
-                            <div key={idx} className="text-xs text-red-700 mb-1">
-                              Row {err.row}: {err.message}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                  
-                  <div className="flex justify-end">
-                    <button
-                      onClick={() => {
-                        setShowUploadModal(false);
-                        setUploadFile(null);
-                        setUploadReport(null);
-                      }}
-                      className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm hover:bg-blue-700"
-                    >
-                      Close
-                    </button>
-                  </div>
-                </>
-              )}
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Phone Number
+              </label>
+              <input
+                type="tel"
+                value={newPhoneNumber}
+                onChange={(e) => setNewPhoneNumber(e.target.value)}
+                placeholder="Enter 10-digit phone number"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
+                maxLength={15}
+              />
+              <p className="text-xs text-gray-500 mt-1">Enter phone number without country code</p>
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => {
+                  setShowPhoneModal(false);
+                  setNewPhoneNumber('');
+                  setSelectedInvoiceForPhone(null);
+                }}
+                className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
+                disabled={updatingPhone}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={updatePhoneNumber}
+                disabled={updatingPhone || !newPhoneNumber.trim()}
+                className="flex-1 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {updatingPhone ? 'Updating...' : 'Update Phone'}
+              </button>
             </div>
           </div>
         </div>

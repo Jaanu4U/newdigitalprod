@@ -123,7 +123,7 @@ export default function OrgUsersPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${base}v1/org/users`, withTenantHeaders({
+      const res = await fetch(`${base}org/users`, withTenantHeaders({
         headers: {
           Authorization: `Bearer ${accessToken}`,
         },
@@ -145,7 +145,7 @@ export default function OrgUsersPage() {
   const handleAddUser = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const res = await fetch(`${base}v1/org/users`, withTenantHeaders({
+      const res = await fetch(`${base}org/users`, withTenantHeaders({
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -194,7 +194,7 @@ export default function OrgUsersPage() {
     e.preventDefault();
     if (!editingId) return;
     try {
-      const res = await fetch(`${base}v1/org/users/${editingId}`, withTenantHeaders({
+      const res = await fetch(`${base}org/users/${editingId}`, withTenantHeaders({
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
@@ -217,7 +217,7 @@ export default function OrgUsersPage() {
   const handleDeleteUser = async (userId: string) => {
     if (!confirm("Delete this user?")) return;
     try {
-      const res = await fetch(`${base}v1/org/users/${userId}`, withTenantHeaders({
+      const res = await fetch(`${base}org/users/${userId}`, withTenantHeaders({
         method: "DELETE",
         headers: {
           Authorization: `Bearer ${token}`,

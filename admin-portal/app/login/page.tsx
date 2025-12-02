@@ -17,8 +17,14 @@ export default function Login() {
   const [showResendButton, setShowResendButton] = useState(false);
   const [resendLoading, setResendLoading] = useState(false);
   const [resendSuccess, setResendSuccess] = useState(false);
+  const [mounted, setMounted] = useState(false);
 
   const slug = getTenantSlugFromHost();
+
+  // Prevent hydration mismatch by only rendering after mount
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   // If on apex, redirect to dedicated SuperAdmin login page
   useEffect(() => {
@@ -42,7 +48,7 @@ export default function Login() {
     async function run() {
       if (!slug) { setOrgExists(null); return; }
       try {
-  const r = await fetch(`${apiBase()}v1/org/check?slug=${encodeURIComponent(slug)}`, { cache: "no-store" });
+  const r = await fetch(`${apiBase()}org/check?slug=${encodeURIComponent(slug)}`, { cache: "no-store" });
         const j = await r.json().catch(()=>({}));
         const available = Boolean(j?.slug?.available);
         if (alive) setOrgExists(!available); // exists = !available
@@ -70,7 +76,7 @@ export default function Login() {
     try {
       if (slug) {
         // Tenant org login (host or X-Org resolves org)
-  const res = await fetch(`${apiBase()}v1/auth/login`, withTenantHeaders({
+  const res = await fetch(`${apiBase()}auth/login`, withTenantHeaders({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ email, password })
@@ -97,7 +103,7 @@ export default function Login() {
       }
 
       // SuperAdmin login on apex
-  const res = await fetch(`${apiBase()}v1/auth/superadmin-login`, {
+  const res = await fetch(`${apiBase()}auth/superadmin-login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password }),
@@ -125,7 +131,7 @@ export default function Login() {
     setResendLoading(true);
     setResendSuccess(false);
     try {
-      const res = await fetch(`${apiBase()}v1/org/resend-verification?email=${encodeURIComponent(email)}`, {
+      const res = await fetch(`${apiBase()}org/resend-verification?email=${encodeURIComponent(email)}`, {
         method: "POST",
       });
       if (!res.ok) {
@@ -149,6 +155,11 @@ export default function Login() {
         : "Sign in to your organization's admin portal")
     : "Taking you to SuperAdmin login";
 
+  // Prevent hydration mismatch - don't render until mounted
+  if (!mounted) {
+    return null;
+  }
+
   return (
     <main className="min-h-[80vh] grid md:grid-cols-2 gap-0 items-stretch">
       {/* Left brand panel */}
@@ -160,10 +171,10 @@ export default function Login() {
               <div className="h-10 w-10 rounded-lg bg-white/20" />
               <div>
                 <div className="text-xl font-semibold">Digitalchain</div>
-                <div className="text-white/80 text-sm">{slug ? "Organization Portal" : "SuperAdmin Portal"}</div>
+                <div className="text-white/80 text-sm" suppressHydrationWarning>{slug ? "Organization Portal" : "SuperAdmin Portal"}</div>
               </div>
             </div>
-            <div className="mt-10 space-y-3 text-white/90">
+            <div className="mt-10 space-y-3 text-white/90" suppressHydrationWarning>
               {slug ? (
                 <>
                   <div className="flex items-center gap-2"><ShieldCheck size={18} /> Secure access for your organization</div>
@@ -178,7 +189,7 @@ export default function Login() {
               )}
             </div>
           </div>
-          <div className="text-white/70 text-sm">© {new Date().getFullYear()} Digitalchain {slug ? "Org" : "SuperAdmin"}</div>
+          <div className="text-white/70 text-sm" suppressHydrationWarning>© {new Date().getFullYear()} Digitalchain {slug ? "Org" : "SuperAdmin"}</div>
         </div>
       </div>
 
@@ -218,6 +229,7 @@ export default function Login() {
                 <input
                   className="w-full rounded-md border border-gray-300 pl-10 pr-3 py-2 focus:outline-none focus:ring-2 focus:ring-brand-500"
                   placeholder={slug ? "you@company.com" : "admin@example.com"}
+                  suppressHydrationWarning
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
@@ -250,6 +262,7 @@ export default function Login() {
               </div>
             </div>
 
+            <div suppressHydrationWarning>
             {slug ? (
               <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700">
                 <strong>Organization:</strong> {slug}.digitalchain.in
@@ -259,6 +272,7 @@ export default function Login() {
                 <strong>SuperAdmin Access:</strong> Full platform access with monitoring capabilities for all organizations.
               </div>
             )}
+            </div>
 
             {/* Sign In Button */}
             <div className="pt-2">
@@ -272,7 +286,7 @@ export default function Login() {
             </div>
 
             {/* Footer */}
-            <div className="text-center text-xs text-gray-500 mt-4">
+            <div className="text-center text-xs text-gray-500 mt-4" suppressHydrationWarning>
               {slug ? (
                 <>Need an account? <a className="text-blue-600 underline" href="https://digitalchain.in/signup" target="_blank" rel="noreferrer">Create organization</a></>
               ) : (

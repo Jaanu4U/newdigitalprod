@@ -65,7 +65,7 @@ export default function SuperAdminDashboard() {
     const fetchDashboard = async () => {
       try {
         const { apiBase } = await import("@/lib/api");
-        const res = await fetch(`${apiBase()}v1/superadmin/dashboard`, {
+        const res = await fetch(`${apiBase()}superadmin/dashboard`, {
           headers: { Authorization: `Bearer ${token}` },
         });
 

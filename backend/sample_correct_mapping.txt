@@ -1,0 +1,28 @@
+CORRECT COLUMN MAPPING FOR YOUR CSV:
+
+Your CSV columns (detected):
+- FeedNo → invoice_number ✅
+- FeedDate → invoice_date ✅  
+- CustName → customer_name ✅
+- Phone → customer_phone ✅
+- ProdName → item_name ✅ (THIS IS THE FIX - use ProdName, not DocName!)
+- RxQty → item_quantity ✅
+- Rate → item_price ✅
+- Add4 → customer_address_line1 ✅
+- CustCity → customer_address_line2 ✅
+- Pin → customer_address_line3 ✅
+
+WRONG MAPPING (current):
+DocName → item_name ❌ (DocName contains "." - this is why items show as dots)
+
+CORRECT MAPPING (should be):
+ProdName → item_name ✅ (ProdName has the actual product names)
+
+ACTION REQUIRED:
+1. Delete your saved template "jugesh2"
+2. Upload the CSV file again
+3. When mapping columns in the dropdown, map:
+   - ProdName → item_name (NOT DocName!)
+4. Save the template with a new name
+
+The system will then correctly extract product names from the ProdName column.

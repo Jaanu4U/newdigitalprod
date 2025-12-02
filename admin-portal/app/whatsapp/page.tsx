@@ -31,7 +31,7 @@ export default function WhatsAppPage() {
       return;
     }
     try {
-      const res = await fetch(`${base}v1/me`, withTenantHeaders({
+      const res = await fetch(`${base}me`, withTenantHeaders({
         headers: { Authorization: `Bearer ${token}` }
       }));
       if (!res.ok) throw new Error();
@@ -48,7 +48,7 @@ export default function WhatsAppPage() {
     
     setLoading(true);
     try {
-      const res = await fetch(`${base}v1/whatsapp/sessions`, withTenantHeaders({
+      const res = await fetch(`${base}whatsapp/sessions`, withTenantHeaders({
         headers: { Authorization: `Bearer ${token}` }
       }));
       if (res.ok) {
@@ -75,7 +75,7 @@ export default function WhatsAppPage() {
     if (!token) return;
     
     try {
-      const res = await fetch(`${base}v1/whatsapp/status/${sessionId}`, withTenantHeaders({
+      const res = await fetch(`${base}whatsapp/status/${sessionId}`, withTenantHeaders({
         headers: { Authorization: `Bearer ${token}` }
       }));
       if (res.ok) {
@@ -92,7 +92,7 @@ export default function WhatsAppPage() {
     if (!token) return;
     
     try {
-      const res = await fetch(`${base}v1/whatsapp/qr/${sessionId}`, withTenantHeaders({
+      const res = await fetch(`${base}whatsapp/qr/${sessionId}`, withTenantHeaders({
         headers: { Authorization: `Bearer ${token}` }
       }));
       if (res.ok) {
@@ -116,7 +116,7 @@ export default function WhatsAppPage() {
     if (!token) return;
 
     try {
-      const res = await fetch(`${base}v1/whatsapp/init`, withTenantHeaders({
+      const res = await fetch(`${base}whatsapp/init`, withTenantHeaders({
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -155,7 +155,7 @@ export default function WhatsAppPage() {
     if (!token) return;
 
     try {
-      const res = await fetch(`${base}v1/whatsapp/logout`, withTenantHeaders({
+      const res = await fetch(`${base}whatsapp/logout`, withTenantHeaders({
         method: "POST",
         headers: {
           "Content-Type": "application/json",

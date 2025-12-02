@@ -61,7 +61,7 @@ export default function BillingPage() {
     setError(null);
     try {
       const token = localStorage.getItem("dc_access") || "";
-      const url = new URL(`${base}v1/customers`);
+      const url = new URL(`${base}customers`);
       if (search) url.searchParams.set("q", search);
       const res = await fetch(url.toString(), withTenantHeaders({ headers: { Authorization: `Bearer ${token}` } }));
       if (!res.ok) throw new Error(`HTTP ${res.status}`);

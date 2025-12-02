@@ -66,7 +66,7 @@ export default function SuperAdminMapsPage() {
     setError(null);
     try {
       // Fetch maps config
-      const mapsRes = await fetch(`${base}v1/platform/maps-config`, {
+      const mapsRes = await fetch(`${base}platform/maps-config`, {
         headers: { Authorization: `Bearer ${accessToken}` },
       });
 
@@ -87,7 +87,7 @@ export default function SuperAdminMapsPage() {
       }
 
       // Fetch email config
-      const emailRes = await fetch(`${base}v1/platform/email-config`, {
+      const emailRes = await fetch(`${base}platform/email-config`, {
         headers: { Authorization: `Bearer ${accessToken}` },
       });
 
@@ -111,7 +111,7 @@ export default function SuperAdminMapsPage() {
     setSuccess(null);
 
     try {
-      const res = await fetch(`${base}v1/platform/email-config`, {
+      const res = await fetch(`${base}platform/email-config`, {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
@@ -145,7 +145,7 @@ export default function SuperAdminMapsPage() {
     setSuccess(null);
 
     try {
-      const res = await fetch(`${base}v1/platform/maps-config`, {
+      const res = await fetch(`${base}platform/maps-config`, {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",

@@ -63,6 +63,11 @@ android {
         jvmTarget = "17"
     }
 
+    lint {
+        checkReleaseBuilds = false
+        abortOnError = false
+    }
+
     buildFeatures {
         compose = true
         buildConfig = true

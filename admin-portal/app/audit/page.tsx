@@ -362,7 +362,7 @@ export default function AuditPage() {
       if (fromDate) params.append('from_date', fromDate);
       if (toDate) params.append('to_date', toDate);
 
-      const url = `${base}v1/admin/orders/audit?${params}`;
+      const url = `${base}admin/orders/audit?${params}`;
       console.log('📡 Fetching audit data from:', url);
 
       const response = await fetch(
@@ -479,7 +479,7 @@ export default function AuditPage() {
     try {
       const token = localStorage.getItem('dc_access');
       const response = await fetch(
-        `${base}v1/admin/orders/audit/${invoiceId}`,
+        `${base}admin/orders/audit/${invoiceId}`,
         withTenantHeaders({
           headers: {
             Authorization: `Bearer ${token}`,
@@ -503,7 +503,7 @@ export default function AuditPage() {
     setLoadingLocations(true);
     try {
       const token = localStorage.getItem('dc_access');
-      const url = `${base}v1/admin/orders/audit/${invoiceId}/locations`;
+      const url = `${base}admin/orders/audit/${invoiceId}/locations`;
       console.log('📡 Fetching from URL:', url);
       
       const response = await fetch(

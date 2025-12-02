@@ -52,7 +52,7 @@ function RiderOrdersInner() {
         }
 
         const base = apiBase();
-        const url = `${base}v1/rider/assigned-orders`;
+        const url = `${base}rider/assigned-orders`;
         console.log('[ORDERS DEBUG] Fetching from:', url);
         
         const res = await fetch(

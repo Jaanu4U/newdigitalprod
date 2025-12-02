@@ -163,7 +163,7 @@ export default function BusinessSettingsPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${base}v1/org/settings`, withTenantHeaders({
+      const res = await fetch(`${base}org/settings`, withTenantHeaders({
         cache: "no-store",
         headers: { Authorization: `Bearer ${token}` },
       }));
@@ -193,7 +193,7 @@ export default function BusinessSettingsPage() {
       try {
         const token = localStorage.getItem("dc_access") || "";
         if (token) {
-          const pres = await fetch(`${base}v1/providers`, {
+          const pres = await fetch(`${base}providers`, {
             headers: { Authorization: `Bearer ${token}` },
           });
             if (pres.ok) {
@@ -213,7 +213,7 @@ export default function BusinessSettingsPage() {
 
   const putSettings = async (body: any) => {
     const token = localStorage.getItem("dc_access") || "";
-    const res = await fetch(`${base}v1/org/settings`, withTenantHeaders({
+    const res = await fetch(`${base}org/settings`, withTenantHeaders({
       method: "PUT",
       headers: {
         "Content-Type": "application/json",
