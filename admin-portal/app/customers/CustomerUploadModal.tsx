@@ -22,11 +22,11 @@ export default function CustomerUploadModal({ base, onClose, onSuccess }: Custom
   const [uploadResult, setUploadResult] = useState<UploadResult | null>(null);
 
   const downloadTemplate = () => {
-    const b2cHeaders = 'name,email,phone,address,city,state,pin,notes';
-    const b2cSample = 'John Doe,john@example.com,9876543210,"123 Main St",Mumbai,Maharashtra,400001,VIP customer';
+    const b2cHeaders = 'customer_id,name,email,phone,address,city,state,pin,notes';
+    const b2cSample = 'CUST01,John Doe,john@example.com,9876543210,"123 Main St",Mumbai,Maharashtra,400001,VIP customer';
     
-    const b2bHeaders = 'company_name,name,gstin,email,phone,address,city,state,pin,notes';
-    const b2bSample = 'ABC Corp,John Doe,29ABCDE1234F1Z5,contact@abc.com,9876543210,"456 Business Park",Bangalore,Karnataka,560001,Corporate client';
+    const b2bHeaders = 'customer_id,company_name,name,gstin,email,phone,address,city,state,pin,notes';
+    const b2bSample = 'CORP01,ABC Corp,John Doe,29ABCDE1234F1Z5,contact@abc.com,9876543210,"456 Business Park",Bangalore,Karnataka,560001,Corporate client';
     
     const content = customerType === 'b2b' 
       ? `${b2bHeaders}\n${b2bSample}`
@@ -156,8 +156,8 @@ export default function CustomerUploadModal({ base, onClose, onSuccess }: Custom
                 <h3 className="font-semibold text-blue-900 text-sm">Step 1: Download Template</h3>
                 <p className="text-sm text-blue-700 mt-1">
                   {customerType === 'b2c' 
-                    ? 'Download the B2C template with columns: name, email, phone, address, city, state, pin, notes'
-                    : 'Download the B2B template with columns: company_name, name, gstin, email, phone, address, city, state, pin, notes'
+                    ? 'Download the B2C template with columns: customer_id (optional), name, email, phone, address, city, state, pin, notes'
+                    : 'Download the B2B template with columns: customer_id (optional), company_name, name, gstin, email, phone, address, city, state, pin, notes'
                   }
                 </p>
                 <button
@@ -211,6 +211,8 @@ export default function CustomerUploadModal({ base, onClose, onSuccess }: Custom
                 <h3 className="font-semibold text-yellow-900 text-sm">Important Notes:</h3>
                 <ul className="text-sm text-yellow-800 mt-2 space-y-1 list-disc list-inside">
                   <li>File must be in CSV format</li>
+                  <li>Customer ID is optional - leave empty for auto-generated 6-char ID</li>
+                  <li>Customer ID must be unique (alphanumeric A-Z, a-z, 0-9)</li>
                   <li>{customerType === 'b2c' ? 'Name' : 'Company name'} and phone are required fields</li>
                   {customerType === 'b2b' && <li>GSTIN should be 15 characters (optional)</li>}
                   <li>Phone numbers should be 10 digits without country code</li>

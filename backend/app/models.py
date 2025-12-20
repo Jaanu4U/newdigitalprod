@@ -2,11 +2,18 @@ from sqlalchemy import Column, String, Integer, Boolean, DateTime, ForeignKey, T
 from sqlalchemy.orm import relationship
 from datetime import datetime
 import uuid
+import string
+import random
 from .db import Base
 
 
 def gen_uuid():
     return str(uuid.uuid4())
+
+def gen_custom_id(length=6):
+    """Generate random alphanumeric ID (A-Z, a-z, 0-9)"""
+    chars = string.ascii_letters + string.digits
+    return ''.join(random.choice(chars) for _ in range(length))
 
 class Organization(Base):
     __tablename__ = "organizations"
@@ -93,6 +100,7 @@ class Customer(Base):
     __tablename__ = "customers"
     customer_id = Column(String, primary_key=True, default=gen_uuid)
     org_id = Column(String, ForeignKey("organizations.org_id"), nullable=False, index=True)
+    custom_customer_id = Column(String, nullable=True, index=True)  # User-defined or auto-generated 6-char ID
     ctype = Column(String, nullable=False)  # 'B2B' or 'B2C'
     name = Column(String, nullable=False)
     company_name = Column(String, nullable=True)

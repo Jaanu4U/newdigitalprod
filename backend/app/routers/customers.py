@@ -41,6 +41,7 @@ def list_customers(
     items = [
         schemas.CustomerOut(
             customer_id=r.customer_id,
+            custom_customer_id=r.custom_customer_id,
             ctype=r.ctype,
             name=r.name,
             company_name=r.company_name,
@@ -73,9 +74,37 @@ def create_customer(
     gstin = (payload.gstin or "").strip().upper()
     if ctype == "b2b" and gstin and len(gstin) != 15:
         raise HTTPException(status_code=400, detail="Invalid GSTIN format (expected 15 chars)")
+    
+    # Handle custom_customer_id: use provided or generate random 6-char ID
+    custom_id = (payload.custom_customer_id or "").strip()
+    if not custom_id:
+        # Generate unique 6-character alphanumeric ID
+        from ..models import gen_custom_id
+        max_attempts = 10
+        for _ in range(max_attempts):
+            custom_id = gen_custom_id(6)
+            # Check if ID already exists for this org
+            existing = db.query(models.Customer).filter(
+                models.Customer.org_id == principal.org_id,
+                models.Customer.custom_customer_id == custom_id
+            ).first()
+            if not existing:
+                break
+        else:
+            # Fallback to 8 chars if 6 chars keep colliding
+            custom_id = gen_custom_id(8)
+    else:
+        # Validate user-provided ID is unique within org
+        existing = db.query(models.Customer).filter(
+            models.Customer.org_id == principal.org_id,
+            models.Customer.custom_customer_id == custom_id
+        ).first()
+        if existing:
+            raise HTTPException(status_code=400, detail=f"Customer ID '{custom_id}' already exists")
 
     row = models.Customer(
         org_id=principal.org_id,
+        custom_customer_id=custom_id,
         ctype=ctype,
         name=payload.name,
         company_name=payload.company_name,
@@ -94,6 +123,7 @@ def create_customer(
     db.refresh(row)
     return schemas.CustomerOut(
         customer_id=row.customer_id,
+        custom_customer_id=row.custom_customer_id,
         ctype=row.ctype,
         name=row.name,
         company_name=row.company_name,
@@ -118,6 +148,7 @@ def get_customer(customer_id: str, principal: CurrentPrincipal = Depends(get_cur
         raise HTTPException(status_code=404, detail="Customer not found")
     return schemas.CustomerOut(
         customer_id=row.customer_id,
+        custom_customer_id=row.custom_customer_id,
         ctype=row.ctype,
         name=row.name,
         company_name=row.company_name,
@@ -150,6 +181,18 @@ def update_customer(
         if ct not in {"b2b", "b2c"}:
             raise HTTPException(status_code=400, detail="ctype must be 'b2b' or 'b2c'")
         row.ctype = ct
+    if payload.custom_customer_id is not None:
+        custom_id = payload.custom_customer_id.strip()
+        if custom_id:
+            # Validate uniqueness within org
+            existing = db.query(models.Customer).filter(
+                models.Customer.org_id == principal.org_id,
+                models.Customer.custom_customer_id == custom_id,
+                models.Customer.customer_id != customer_id
+            ).first()
+            if existing:
+                raise HTTPException(status_code=400, detail=f"Customer ID '{custom_id}' already exists")
+        row.custom_customer_id = custom_id or None
     for field in ["name", "company_name", "email", "phone", "address", "city", "state", "pin", "notes"]:
         v = getattr(payload, field, None)
         if v is not None:
@@ -163,6 +206,7 @@ def update_customer(
     db.refresh(row)
     return schemas.CustomerOut(
         customer_id=row.customer_id,
+        custom_customer_id=row.custom_customer_id,
         ctype=row.ctype,
         name=row.name,
         company_name=row.company_name,
@@ -233,6 +277,7 @@ async def bulk_upload_customers(
         total_rows += 1
         try:
             # Common fields
+            custom_id = (row.get('customer_id') or '').strip()
             phone = (row.get('phone') or '').strip()
             email = (row.get('email') or '').strip() or None
             address = (row.get('address') or '').strip() or None
@@ -240,6 +285,31 @@ async def bulk_upload_customers(
             state = (row.get('state') or '').strip() or None
             pin = (row.get('pin') or '').strip() or None
             notes = (row.get('notes') or '').strip() or None
+            
+            # Generate custom_customer_id if not provided
+            if not custom_id:
+                from ..models import gen_custom_id
+                max_attempts = 10
+                for _ in range(max_attempts):
+                    custom_id = gen_custom_id(6)
+                    existing = db.query(models.Customer).filter(
+                        models.Customer.org_id == principal.org_id,
+                        models.Customer.custom_customer_id == custom_id
+                    ).first()
+                    if not existing:
+                        break
+                else:
+                    custom_id = gen_custom_id(8)
+            else:
+                # Check if custom_id already exists
+                existing = db.query(models.Customer).filter(
+                    models.Customer.org_id == principal.org_id,
+                    models.Customer.custom_customer_id == custom_id
+                ).first()
+                if existing:
+                    errors.append({"row": idx, "error": f"Customer ID '{custom_id}' already exists"})
+                    failed += 1
+                    continue
             
             # Validate required fields
             if not phone:
@@ -267,6 +337,7 @@ async def bulk_upload_customers(
                 
                 customer = models.Customer(
                     org_id=principal.org_id,
+                    custom_customer_id=custom_id,
                     ctype='b2c',
                     name=name,
                     email=email,
@@ -296,6 +367,7 @@ async def bulk_upload_customers(
                 
                 customer = models.Customer(
                     org_id=principal.org_id,
+                    custom_customer_id=custom_id,
                     ctype='b2b',
                     company_name=company_name,
                     name=name,

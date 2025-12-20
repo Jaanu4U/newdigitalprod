@@ -78,6 +78,7 @@ export default function CustomersPage() {
 
   // form state
   const [ctype, setCtype] = useState<"b2b" | "b2c">("b2c");
+  const [customerId, setCustomerId] = useState("");
   const [name, setName] = useState("");
   const [company, setCompany] = useState("");
   const [gstin, setGstin] = useState("");
@@ -415,6 +416,7 @@ export default function CustomersPage() {
     try {
       const token = localStorage.getItem("dc_access") || "";
       const payload: any = {
+        custom_customer_id: customerId || undefined,
         ctype,
         name: name || undefined,
         company_name: company || undefined,
@@ -435,6 +437,10 @@ export default function CustomersPage() {
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
         const detail: string | undefined = d?.detail || undefined;
+        if (detail && /customer id.*already exists/i.test(detail)) {
+          setFormErrors((prev) => ({ ...prev, customerId: detail }));
+          return;
+        }
         if (detail && /gstin/i.test(detail)) {
           setFormErrors((prev) => ({ ...prev, gstin: detail }));
           return;
@@ -443,7 +449,7 @@ export default function CustomersPage() {
         return;
       }
       // reset
-      setName(""); setCompany(""); setGstin(""); setEmail(""); setPhone(""); setAddress(""); setCity(""); setState(""); setPin(""); setNotes("");
+      setCustomerId(""); setName(""); setCompany(""); setGstin(""); setEmail(""); setPhone(""); setAddress(""); setCity(""); setState(""); setPin(""); setNotes("");
       setFormErrors({});
       await fetchCustomers(q);
     } catch (e: any) {
@@ -703,6 +709,21 @@ export default function CustomersPage() {
             </button>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div>
+              <label className="block text-xs text-gray-600 mb-1">Customer ID (Optional)</label>
+              <input 
+                value={customerId} 
+                onChange={(e) => {
+                  setCustomerId(e.target.value.replace(/[^A-Za-z0-9]/g, ''));
+                  setFormErrors((p) => ({ ...p, customerId: "" }));
+                }} 
+                className={`w-full px-2 py-2 border rounded-md ${formErrors.customerId ? "border-red-400" : "border-gray-300"}`}
+                placeholder="Leave empty for auto-generated ID"
+                maxLength={10}
+              />
+              {formErrors.customerId && <p className="mt-1 text-xs text-red-600">{formErrors.customerId}</p>}
+              <p className="mt-1 text-xs text-gray-500">6-char alphanumeric (A-Z, a-z, 0-9)</p>
+            </div>
             <div>
               <label className="block text-xs text-gray-600 mb-1">Type</label>
               <select value={ctype} onChange={(e) => setCtype(e.target.value as any)} className="w-full px-2 py-2 border border-gray-300 rounded-md">

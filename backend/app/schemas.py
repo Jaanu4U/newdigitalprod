@@ -210,6 +210,7 @@ class ShipmentProviderUpdate(BaseModel):
 # Customer schemas
 class CustomerOut(BaseModel):
     customer_id: str
+    custom_customer_id: Optional[str] = None
     ctype: str  # "b2b" or "b2c"
     name: Optional[str] = None
     company_name: Optional[str] = None
@@ -230,6 +231,7 @@ class CustomersListOut(BaseModel):
 
 
 class CustomerCreate(BaseModel):
+    custom_customer_id: Optional[str] = None
     ctype: Optional[str] = "b2c"
     name: Optional[str] = None
     company_name: Optional[str] = None
@@ -244,6 +246,7 @@ class CustomerCreate(BaseModel):
 
 
 class CustomerUpdate(BaseModel):
+    custom_customer_id: Optional[str] = None
     ctype: Optional[str] = None
     name: Optional[str] = None
     company_name: Optional[str] = None
