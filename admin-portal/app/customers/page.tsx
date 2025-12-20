@@ -710,6 +710,13 @@ export default function CustomersPage() {
           </div>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <div>
+              <label className="block text-xs text-gray-600 mb-1">Type</label>
+              <select value={ctype} onChange={(e) => setCtype(e.target.value as any)} className="w-full px-2 py-2 border border-gray-300 rounded-md">
+                <option value="b2c">B2C (Individual)</option>
+                <option value="b2b">B2B (Business)</option>
+              </select>
+            </div>
+            <div>
               <label className="block text-xs text-gray-600 mb-1">Customer ID (Optional)</label>
               <input 
                 value={customerId} 
@@ -723,13 +730,6 @@ export default function CustomersPage() {
               />
               {formErrors.customerId && <p className="mt-1 text-xs text-red-600">{formErrors.customerId}</p>}
               <p className="mt-1 text-xs text-gray-500">6-char alphanumeric (A-Z, a-z, 0-9)</p>
-            </div>
-            <div>
-              <label className="block text-xs text-gray-600 mb-1">Type</label>
-              <select value={ctype} onChange={(e) => setCtype(e.target.value as any)} className="w-full px-2 py-2 border border-gray-300 rounded-md">
-                <option value="b2c">B2C (Individual)</option>
-                <option value="b2b">B2B (Business)</option>
-              </select>
             </div>
             {ctype === "b2b" ? (
               <>
