@@ -1,6 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
 from sqlalchemy.orm import Session
 from typing import Optional
+import csv
+import io
 from ..db import get_db, Base, engine
 from .. import models, schemas
 from ..deps import get_current_principal, CurrentPrincipal
@@ -186,3 +188,141 @@ def delete_customer(customer_id: str, principal: CurrentPrincipal = Depends(get_
     db.delete(row)
     db.commit()
     return {"status": "ok"}
+
+
+@router.post("/customers/bulk-upload")
+async def bulk_upload_customers(
+    file: UploadFile = File(...),
+    ctype: str = Form(...),
+    principal: CurrentPrincipal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    """
+    Bulk upload customers from CSV file.
+    B2C columns: name, email, phone, address, city, state, pin, notes
+    B2B columns: company_name, name, gstin, email, phone, address, city, state, pin, notes
+    """
+    _ensure_billing_role(principal)
+    
+    if ctype not in {"b2b", "b2c"}:
+        raise HTTPException(status_code=400, detail="ctype must be 'b2b' or 'b2c'")
+    
+    if not file.filename.endswith('.csv'):
+        raise HTTPException(status_code=400, detail="File must be a CSV file")
+    
+    # Read file content
+    content = await file.read()
+    try:
+        text_content = content.decode('utf-8')
+    except UnicodeDecodeError:
+        try:
+            text_content = content.decode('latin-1')
+        except:
+            raise HTTPException(status_code=400, detail="Unable to decode CSV file. Please ensure it's UTF-8 or Latin-1 encoded")
+    
+    # Parse CSV
+    csv_file = io.StringIO(text_content)
+    reader = csv.DictReader(csv_file)
+    
+    total_rows = 0
+    successful = 0
+    failed = 0
+    errors = []
+    
+    for idx, row in enumerate(reader, start=2):  # Start at 2 because row 1 is header
+        total_rows += 1
+        try:
+            # Common fields
+            phone = (row.get('phone') or '').strip()
+            email = (row.get('email') or '').strip() or None
+            address = (row.get('address') or '').strip() or None
+            city = (row.get('city') or '').strip() or None
+            state = (row.get('state') or '').strip() or None
+            pin = (row.get('pin') or '').strip() or None
+            notes = (row.get('notes') or '').strip() or None
+            
+            # Validate required fields
+            if not phone:
+                errors.append({"row": idx, "error": "Phone number is required"})
+                failed += 1
+                continue
+            
+            # Check for duplicate phone in same org
+            existing = db.query(models.Customer).filter(
+                models.Customer.org_id == principal.org_id,
+                models.Customer.phone == phone
+            ).first()
+            
+            if existing:
+                errors.append({"row": idx, "error": f"Customer with phone {phone} already exists"})
+                failed += 1
+                continue
+            
+            if ctype == 'b2c':
+                name = (row.get('name') or '').strip()
+                if not name:
+                    errors.append({"row": idx, "error": "Name is required for B2C customers"})
+                    failed += 1
+                    continue
+                
+                customer = models.Customer(
+                    org_id=principal.org_id,
+                    ctype='b2c',
+                    name=name,
+                    email=email,
+                    phone=phone,
+                    address=address,
+                    city=city,
+                    state=state,
+                    pin=pin,
+                    notes=notes,
+                    created_by=principal.user_id,
+                )
+            else:  # b2b
+                company_name = (row.get('company_name') or '').strip()
+                if not company_name:
+                    errors.append({"row": idx, "error": "Company name is required for B2B customers"})
+                    failed += 1
+                    continue
+                
+                name = (row.get('name') or '').strip() or None
+                gstin = (row.get('gstin') or '').strip().upper() or None
+                
+                # Validate GSTIN if provided
+                if gstin and len(gstin) != 15:
+                    errors.append({"row": idx, "error": f"Invalid GSTIN format (expected 15 characters, got {len(gstin)})"})
+                    failed += 1
+                    continue
+                
+                customer = models.Customer(
+                    org_id=principal.org_id,
+                    ctype='b2b',
+                    company_name=company_name,
+                    name=name,
+                    gstin=gstin,
+                    email=email,
+                    phone=phone,
+                    address=address,
+                    city=city,
+                    state=state,
+                    pin=pin,
+                    notes=notes,
+                    created_by=principal.user_id,
+                )
+            
+            db.add(customer)
+            db.commit()
+            successful += 1
+            
+        except Exception as e:
+            db.rollback()
+            errors.append({"row": idx, "error": str(e)})
+            failed += 1
+    
+    return {
+        "total_rows": total_rows,
+        "successful": successful,
+        "failed": failed,
+        "errors": errors[:50]  # Limit errors to first 50
+    }
+

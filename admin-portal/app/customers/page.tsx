@@ -4,8 +4,9 @@ import { useEffect, useMemo, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { apiBase } from "@/lib/api";
 import { getTenantSlugFromHost, withTenantHeaders } from "@/lib/tenant";
-import { Plus, Search, Users, FileText, Pencil, Trash2, ChevronLeft, ChevronRight, MapPin, User } from "lucide-react";
+import { Plus, Search, Users, FileText, Pencil, Trash2, ChevronLeft, ChevronRight, MapPin, User, Upload } from "lucide-react";
 import PageHeader from "@/components/PageHeader";
+import CustomerUploadModal from "./CustomerUploadModal";
 
 type Customer = {
   customer_id: string;
@@ -71,6 +72,9 @@ export default function CustomersPage() {
   // bulk selection and delete
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
+  
+  // bulk upload
+  const [showUploadModal, setShowUploadModal] = useState(false);
 
   // form state
   const [ctype, setCtype] = useState<"b2b" | "b2c">("b2c");
@@ -665,8 +669,15 @@ export default function CustomersPage() {
 
   {listError && <div className="mb-6 rounded-lg border border-red-200 bg-red-50 px-5 py-4 text-sm text-red-700 shadow-md"><strong>⚠ Error:</strong> {listError}</div>}
 
-        {/* Add Customer Button */}
-        <div className="flex items-center justify-end mb-6">
+        {/* Add Customer & Upload Buttons */}
+        <div className="flex items-center justify-end gap-3 mb-6">
+          <button
+            onClick={() => setShowUploadModal(true)}
+            className="inline-flex items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-blue-600 to-cyan-600 text-white rounded-lg hover:from-blue-700 hover:to-cyan-700 transition-all shadow-md hover:shadow-lg font-semibold"
+          >
+            <Upload size={20} />
+            Bulk Upload
+          </button>
           <button
             onClick={() => setShowCreateForm(!showCreateForm)}
             className="inline-flex items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-purple-600 to-indigo-600 text-white rounded-lg hover:from-purple-700 hover:to-indigo-700 transition-all shadow-md hover:shadow-lg font-semibold"
@@ -1145,6 +1156,18 @@ export default function CustomersPage() {
               </div>
             </div>
           </div>
+        )}
+
+        {/* Bulk Upload Modal */}
+        {showUploadModal && (
+          <CustomerUploadModal
+            base={base}
+            onClose={() => setShowUploadModal(false)}
+            onSuccess={() => {
+              setShowUploadModal(false);
+              fetchCustomers(q, 1, pageSize);
+            }}
+          />
         )}
       </div>
     </div>
