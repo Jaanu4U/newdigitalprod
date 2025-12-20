@@ -897,36 +897,6 @@ function OrdersInner() {
     }
   }, [base, selectedIds]);
 
-  const toggleSelectAll = useCallback(() => {
-    if (selectedIds.size === paginationData.paginatedRows.length) {
-      // Deselect all on current page
-      setSelectedIds(prev => {
-        const newSet = new Set(prev);
-        paginationData.paginatedRows.forEach(r => newSet.delete(r.id));
-        return newSet;
-      });
-    } else {
-      // Select all on current page
-      setSelectedIds(prev => {
-        const newSet = new Set(prev);
-        paginationData.paginatedRows.forEach(r => newSet.add(r.id));
-        return newSet;
-      });
-    }
-  }, [paginationData.paginatedRows, selectedIds.size]);
-
-  const toggleSelect = useCallback((invoiceId: number) => {
-    setSelectedIds(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(invoiceId)) {
-        newSet.delete(invoiceId);
-      } else {
-        newSet.add(invoiceId);
-      }
-      return newSet;
-    });
-  }, []);
-
   const updatePhoneNumber = useCallback(async () => {
     if (!selectedInvoiceForPhone || !newPhoneNumber.trim()) {
       alert('Please enter a phone number');
@@ -1016,6 +986,37 @@ function OrdersInner() {
     
     return { totalPages, startIndex, endIndex, paginatedRows };
   }, [filteredRows, currentPage, itemsPerPage]);
+
+  // Selection callbacks - defined after paginationData to avoid circular dependency
+  const toggleSelectAll = useCallback(() => {
+    if (selectedIds.size === paginationData.paginatedRows.length) {
+      // Deselect all on current page
+      setSelectedIds(prev => {
+        const newSet = new Set(prev);
+        paginationData.paginatedRows.forEach(r => newSet.delete(r.id));
+        return newSet;
+      });
+    } else {
+      // Select all on current page
+      setSelectedIds(prev => {
+        const newSet = new Set(prev);
+        paginationData.paginatedRows.forEach(r => newSet.add(r.id));
+        return newSet;
+      });
+    }
+  }, [paginationData.paginatedRows, selectedIds.size]);
+
+  const toggleSelect = useCallback((invoiceId: number) => {
+    setSelectedIds(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(invoiceId)) {
+        newSet.delete(invoiceId);
+      } else {
+        newSet.add(invoiceId);
+      }
+      return newSet;
+    });
+  }, []);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 py-8">
