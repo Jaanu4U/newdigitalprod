@@ -67,6 +67,10 @@ export default function CustomersPage() {
   const [delCustomer, setDelCustomer] = useState<Customer | null>(null);
   const [delLoading, setDelLoading] = useState(false);
   const [delError, setDelError] = useState<string | null>(null);
+  
+  // bulk selection and delete
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkDeleting, setBulkDeleting] = useState(false);
 
   // form state
   const [ctype, setCtype] = useState<"b2b" | "b2c">("b2c");
@@ -445,6 +449,81 @@ export default function CustomersPage() {
     }
   };
 
+  const bulkDeleteCustomers = async () => {
+    if (selectedIds.size === 0) {
+      alert('Please select customers to delete');
+      return;
+    }
+
+    if (!confirm(`Delete ${selectedIds.size} selected customer(s)? This cannot be undone.`)) return;
+    
+    setBulkDeleting(true);
+    const token = localStorage.getItem('dc_access') || '';
+    let successCount = 0;
+    let failCount = 0;
+
+    try {
+      for (const customerId of Array.from(selectedIds)) {
+        try {
+          const res = await fetch(
+            `${base}customers/${customerId}`,
+            withTenantHeaders({
+              method: 'DELETE',
+              headers: { Authorization: `Bearer ${token}` }
+            })
+          );
+          
+          if (res.ok) {
+            successCount++;
+          } else {
+            failCount++;
+          }
+        } catch (e) {
+          console.error(`Failed to delete customer ${customerId}:`, e);
+          failCount++;
+        }
+      }
+
+      // Remove successfully deleted customers from local state
+      if (successCount > 0) {
+        setItems(prev => prev.filter(c => !selectedIds.has(c.customer_id)));
+        setSelectedIds(new Set());
+      }
+
+      // Show result
+      if (failCount === 0) {
+        alert(`Successfully deleted ${successCount} customer(s)`);
+      } else {
+        alert(`Deleted ${successCount} customer(s). Failed to delete ${failCount} customer(s).`);
+      }
+    } catch (e) {
+      console.error(e);
+      alert('Bulk delete failed');
+    } finally {
+      setBulkDeleting(false);
+    }
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === items.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(items.map(c => c.customer_id)));
+    }
+  };
+
+  const toggleSelect = (customerId: string) => {
+    setSelectedIds(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(customerId)) {
+        newSet.delete(customerId);
+      } else {
+        newSet.add(customerId);
+      }
+      return newSet;
+    });
+  };
+
   // Generate Invoice modal handlers
   const openGenerateInvoice = (c: Customer) => {
     setGiCustomer(c);
@@ -682,12 +761,47 @@ export default function CustomersPage() {
         </div>
         )}
 
+        {/* Bulk Actions Bar */}
+        {selectedIds.size > 0 && (
+          <div className="mb-4 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg shadow-sm border-2 border-blue-200 p-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <span className="text-sm font-semibold text-blue-900">
+                  {selectedIds.size} customer(s) selected
+                </span>
+                <button
+                  onClick={() => setSelectedIds(new Set())}
+                  className="text-xs text-blue-700 hover:text-blue-800 underline"
+                >
+                  Clear selection
+                </button>
+              </div>
+              <button
+                onClick={bulkDeleteCustomers}
+                disabled={bulkDeleting}
+                className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+              >
+                <Trash2 size={16} />
+                {bulkDeleting ? 'Deleting...' : `Delete ${selectedIds.size}`}
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Customer Table */}
         <div className="bg-white rounded-xl border-2 border-gray-200 shadow-lg overflow-hidden">
           <div className="overflow-x-auto">
           <table className="w-full">
             <thead>
               <tr className="bg-gradient-to-r from-gray-50 to-gray-100 border-b-2 border-gray-200">
+                <th className="px-4 py-4 text-left">
+                  <input
+                    type="checkbox"
+                    checked={items.length > 0 && selectedIds.size === items.length}
+                    onChange={toggleSelectAll}
+                    className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-2 focus:ring-blue-500"
+                  />
+                </th>
                 <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">Type</th>
                 <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">Name / Company</th>
                 <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">Contact</th>
@@ -698,20 +812,30 @@ export default function CustomersPage() {
             <tbody className="divide-y divide-gray-200">
               {loading ? (
                 <tr>
-                  <td colSpan={5} className="px-6 py-12 text-center text-gray-500">
+                  <td colSpan={6} className="px-6 py-12 text-center text-gray-500">
                     <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-purple-600 mx-auto mb-3"></div>
                     Loading customers...
                   </td>
                 </tr>
               ) : items.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-6 py-12 text-center text-gray-500">
+                  <td colSpan={6} className="px-6 py-12 text-center text-gray-500">
                     <Users className="w-14 h-14 mx-auto mb-3 text-gray-300" />
                     <p className="font-semibold text-gray-700">No customers found</p>
                   </td>
                 </tr>
               ) : items.map((c) => (
-                <tr key={c.customer_id} className="hover:bg-purple-50/30 transition-colors duration-150">
+                <tr key={c.customer_id} className={`hover:bg-purple-50/30 transition-colors duration-150 ${
+                  selectedIds.has(c.customer_id) ? 'bg-blue-50' : ''
+                }`}>
+                  <td className="px-4 py-4">
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(c.customer_id)}
+                      onChange={() => toggleSelect(c.customer_id)}
+                      className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-2 focus:ring-blue-500"
+                    />
+                  </td>
                   <td className="px-6 py-4">
                     <span className={`px-3 py-1.5 rounded-full text-xs font-bold shadow-sm ${
                       c.ctype === 'b2b' ? 'bg-blue-100 text-blue-700 border border-blue-200' : 'bg-green-100 text-green-700 border border-green-200'
