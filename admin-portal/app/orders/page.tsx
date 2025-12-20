@@ -929,7 +929,7 @@ function OrdersInner() {
 
         try {
           const res = await fetch(
-            `${base}invoice/${invoice.customer_id}/rider`,
+            `${base}invoice/${invoice.customer_id}/assign-rider`,
             withTenantHeaders({
               method: 'POST',
               headers: {
@@ -937,8 +937,8 @@ function OrdersInner() {
                 'Content-Type': 'application/json',
               },
               body: JSON.stringify({
+                rider_user_id: riderId,
                 invoice_id: invoice.invoice_id,
-                rider_id: riderId,
               }),
             })
           );
