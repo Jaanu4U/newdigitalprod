@@ -14,6 +14,12 @@ type OrgSettings = {
   timezone?: string;
 };
 
+type MapsUsage = {
+  total_usage: number;
+  usage_by_endpoint: Array<{ endpoint: string; requests: number }>;
+  daily_usage_last_7_days: Array<{ date: string; requests: number }>;
+};
+
 type User = { role: string };
 type Delivery = { status: string };
 
@@ -26,6 +32,7 @@ export default function OrgAdminDashboard() {
   const [org, setOrg] = useState<OrgSettings | null>(null);
   const [userStats, setUserStats] = useState<{ total: number; admins: number; managers: number; riders: number } | null>(null);
   const [deliveryStats, setDeliveryStats] = useState<{ total: number; delivered: number; assigned: number; pending: number } | null>(null);
+  const [mapsUsage, setMapsUsage] = useState<MapsUsage | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -74,10 +81,11 @@ export default function OrgAdminDashboard() {
     setError(null);
     try {
       const h = withTenantHeaders({ headers: { Authorization: `Bearer ${token}` } });
-      const [orgRes, usersRes, delivRes] = await Promise.all([
+      const [orgRes, usersRes, delivRes, mapsRes] = await Promise.all([
         fetch(`${base}org/settings`, h),
         fetch(`${base}org/users`, h),
         fetch(`${base}rider/deliveries`, h),
+        fetch(`${base}org/maps-usage`, h),
       ]);
       
       if (!orgRes.ok) throw new Error(`Org HTTP ${orgRes.status}`);
@@ -111,6 +119,13 @@ export default function OrgAdminDashboard() {
         setDeliveryStats({ total, delivered, assigned, pending });
       } else {
         setDeliveryStats(null);
+      }
+
+      if (mapsRes.ok) {
+        const mapsData = await mapsRes.json();
+        setMapsUsage(mapsData);
+      } else {
+        setMapsUsage({ total_usage: 0, usage_by_endpoint: [], daily_usage_last_7_days: [] });
       }
     } catch (e: any) {
       setError(e.message || 'Failed to load dashboard');
@@ -161,7 +176,7 @@ export default function OrgAdminDashboard() {
         {!loading && (
           <>
             {/* Stats Grid */}
-            <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 mb-8">
+            <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5 mb-8">
               <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
                 <div className="flex items-center justify-between mb-4">
                   <div className="text-sm font-medium text-gray-600">Organization</div>
@@ -212,6 +227,32 @@ export default function OrgAdminDashboard() {
                 </div>
                 <div className="text-xl font-bold text-gray-900 mb-1">{org?.region || '—'}</div>
                 <div className="text-sm text-gray-600">{org?.timezone || '—'}</div>
+              </div>
+
+              <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+                <div className="flex items-center justify-between mb-4">
+                  <div className="text-sm font-medium text-gray-600">Maps API Usage</div>
+                  <svg className="text-red-600" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path>
+                    <circle cx="12" cy="10" r="3"></circle>
+                  </svg>
+                </div>
+                <div className="text-3xl font-bold text-gray-900 mb-2">
+                  {mapsUsage ? (mapsUsage.total_usage || 0).toLocaleString() : '—'}
+                </div>
+                <div className="text-xs text-gray-600">
+                  {mapsUsage && mapsUsage.usage_by_endpoint && mapsUsage.usage_by_endpoint.length > 0 ? (
+                    <div className="space-y-1">
+                      {mapsUsage.usage_by_endpoint.slice(0, 2).map((item) => (
+                        <div key={item.endpoint}>
+                          {item.endpoint}: <span className="font-medium">{item.requests.toLocaleString()}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div>Total requests</div>
+                  )}
+                </div>
               </div>
             </section>
 
