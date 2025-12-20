@@ -91,6 +91,8 @@ function OrdersInner() {
   const [selectedInvoiceForPhone, setSelectedInvoiceForPhone] = useState<DraftRow | null>(null);
   const [newPhoneNumber, setNewPhoneNumber] = useState("");
   const [updatingPhone, setUpdatingPhone] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [bulkDeleting, setBulkDeleting] = useState(false);
   const searchParams = useSearchParams();
   const from = searchParams?.get('from');
 
@@ -824,6 +826,12 @@ function OrdersInner() {
       if (res.ok) {
         // Remove from local state
         setRows(prev => prev.filter(r => r.id !== invoiceId));
+        // Remove from selection if selected
+        setSelectedIds(prev => {
+          const newSet = new Set(prev);
+          newSet.delete(invoiceId);
+          return newSet;
+        });
       } else {
         alert('Failed to delete invoice');
       }
@@ -832,6 +840,92 @@ function OrdersInner() {
       alert('Failed to delete invoice');
     }
   }, [base]);
+
+  const bulkDeleteInvoices = useCallback(async () => {
+    if (selectedIds.size === 0) {
+      alert('Please select invoices to delete');
+      return;
+    }
+
+    if (!confirm(`Delete ${selectedIds.size} selected invoice(s)? This cannot be undone.`)) return;
+    
+    setBulkDeleting(true);
+    const token = localStorage.getItem('dc_access') || '';
+    let successCount = 0;
+    let failCount = 0;
+
+    try {
+      // Delete invoices one by one
+      for (const invoiceId of Array.from(selectedIds)) {
+        try {
+          const res = await fetch(
+            `${base}invoice/draft/${invoiceId}`,
+            withTenantHeaders({
+              method: 'DELETE',
+              headers: { Authorization: `Bearer ${token}` }
+            })
+          );
+          
+          if (res.ok) {
+            successCount++;
+          } else {
+            failCount++;
+          }
+        } catch (e) {
+          console.error(`Failed to delete invoice ${invoiceId}:`, e);
+          failCount++;
+        }
+      }
+
+      // Remove successfully deleted invoices from local state
+      if (successCount > 0) {
+        setRows(prev => prev.filter(r => !selectedIds.has(r.id)));
+        setSelectedIds(new Set());
+      }
+
+      // Show result
+      if (failCount === 0) {
+        alert(`Successfully deleted ${successCount} invoice(s)`);
+      } else {
+        alert(`Deleted ${successCount} invoice(s). Failed to delete ${failCount} invoice(s).`);
+      }
+    } catch (e) {
+      console.error(e);
+      alert('Bulk delete failed');
+    } finally {
+      setBulkDeleting(false);
+    }
+  }, [base, selectedIds]);
+
+  const toggleSelectAll = useCallback(() => {
+    if (selectedIds.size === paginationData.paginatedRows.length) {
+      // Deselect all on current page
+      setSelectedIds(prev => {
+        const newSet = new Set(prev);
+        paginationData.paginatedRows.forEach(r => newSet.delete(r.id));
+        return newSet;
+      });
+    } else {
+      // Select all on current page
+      setSelectedIds(prev => {
+        const newSet = new Set(prev);
+        paginationData.paginatedRows.forEach(r => newSet.add(r.id));
+        return newSet;
+      });
+    }
+  }, [paginationData.paginatedRows, selectedIds.size]);
+
+  const toggleSelect = useCallback((invoiceId: number) => {
+    setSelectedIds(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(invoiceId)) {
+        newSet.delete(invoiceId);
+      } else {
+        newSet.add(invoiceId);
+      }
+      return newSet;
+    });
+  }, []);
 
   const updatePhoneNumber = useCallback(async () => {
     if (!selectedInvoiceForPhone || !newPhoneNumber.trim()) {
@@ -1052,6 +1146,33 @@ function OrdersInner() {
           )}
           {filteredRows.length > 0 && (
         <>
+        {/* Bulk Actions Bar */}
+        {selectedIds.size > 0 && (
+          <div className="mb-4 bg-gradient-to-r from-red-50 to-orange-50 rounded-lg shadow-sm border-2 border-red-200 p-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <span className="text-sm font-semibold text-red-900">
+                  {selectedIds.size} invoice(s) selected
+                </span>
+                <button
+                  onClick={() => setSelectedIds(new Set())}
+                  className="text-xs text-red-700 hover:text-red-800 underline"
+                >
+                  Clear selection
+                </button>
+              </div>
+              <button
+                onClick={bulkDeleteInvoices}
+                disabled={bulkDeleting}
+                className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+              >
+                <Trash2 size={16} />
+                {bulkDeleting ? 'Deleting...' : `Delete ${selectedIds.size} Selected`}
+              </button>
+            </div>
+          </div>
+        )}
+
         <div className="mb-4 bg-white rounded-lg shadow-sm border border-gray-200 p-4">
           <div className="flex items-center justify-between text-sm">
             <div className="font-medium text-gray-700">
@@ -1081,6 +1202,15 @@ function OrdersInner() {
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-gradient-to-r from-gray-50 to-gray-100 border-b-2 border-gray-200">
+                <th className="px-3 py-3 text-center font-semibold text-gray-700 w-12">
+                  <input
+                    type="checkbox"
+                    checked={paginationData.paginatedRows.length > 0 && paginationData.paginatedRows.every(r => selectedIds.has(r.id))}
+                    onChange={toggleSelectAll}
+                    className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 cursor-pointer"
+                    title="Select all on this page"
+                  />
+                </th>
                 <th className="px-3 py-3 text-left font-semibold text-gray-700 w-32">Invoice No</th>
                 <th className="px-3 py-3 text-left font-semibold text-gray-700 w-32">Customer</th>
                 <th className="px-3 py-3 text-left font-semibold text-gray-700 w-32">Rider</th>
@@ -1090,7 +1220,15 @@ function OrdersInner() {
             </thead>
             <tbody className="divide-y divide-gray-200">
               {paginationData.paginatedRows.map(r => (
-                <tr key={r.id} className="hover:bg-blue-50 transition-colors">
+                <tr key={r.id} className={`hover:bg-blue-50 transition-colors ${selectedIds.has(r.id) ? 'bg-blue-50' : ''}`}>
+                  <td className="px-3 py-3 text-center">
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(r.id)}
+                      onChange={() => toggleSelect(r.id)}
+                      className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 cursor-pointer"
+                    />
+                  </td>
                   <td className="px-3 py-3">
                     <div className="font-semibold text-gray-900">{r.invoice_no || '-'}</div>
                     <div className="text-[10px] text-gray-500">
