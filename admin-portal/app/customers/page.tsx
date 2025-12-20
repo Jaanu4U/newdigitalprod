@@ -877,6 +877,7 @@ export default function CustomersPage() {
                   </td>
                   <td className="px-6 py-4">
                     <div className="font-bold text-gray-900 text-base">{c.ctype === "b2b" ? (c.company_name || "-") : (c.name || "-")}</div>
+                    {c.custom_customer_id && <div className="text-xs text-gray-500 mt-1 font-mono">ID: {c.custom_customer_id}</div>}
                     {c.ctype === "b2b" && c.name ? <div className="text-sm text-gray-600 mt-1 flex items-center gap-1"><User size={14} /> {c.name}</div> : null}
                     {c.gstin ? <div className="text-xs text-gray-500 mt-1 font-mono">GSTIN: {c.gstin}</div> : null}
                   </td>
