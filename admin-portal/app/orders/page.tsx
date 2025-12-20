@@ -93,6 +93,8 @@ function OrdersInner() {
   const [updatingPhone, setUpdatingPhone] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [showBulkRiderModal, setShowBulkRiderModal] = useState(false);
+  const [bulkAssigning, setBulkAssigning] = useState(false);
   const searchParams = useSearchParams();
   const from = searchParams?.get('from');
 
@@ -897,6 +899,80 @@ function OrdersInner() {
     }
   }, [base, selectedIds]);
 
+  const bulkAssignRider = useCallback(async (riderId: string) => {
+    if (selectedIds.size === 0) {
+      alert('Please select invoices to assign');
+      return;
+    }
+
+    setBulkAssigning(true);
+    const token = localStorage.getItem('dc_access') || '';
+    let successCount = 0;
+    let failCount = 0;
+
+    try {
+      // Get selected invoices
+      const selectedInvoices = rows.filter(r => selectedIds.has(r.id));
+      
+      // Assign rider to each invoice
+      for (const invoice of selectedInvoices) {
+        // Skip if already accepted by another rider
+        if (invoice.rider_name && invoice.rider_assignment_status === 'accepted') {
+          failCount++;
+          continue;
+        }
+
+        if (!invoice.customer_id || !invoice.invoice_id) {
+          failCount++;
+          continue;
+        }
+
+        try {
+          const res = await fetch(
+            `${base}invoice/${invoice.customer_id}/rider`,
+            withTenantHeaders({
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${token}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                invoice_id: invoice.invoice_id,
+                rider_id: riderId,
+              }),
+            })
+          );
+
+          if (res.ok) {
+            successCount++;
+          } else {
+            failCount++;
+          }
+        } catch (e) {
+          console.error(`Failed to assign rider to invoice ${invoice.invoice_id}:`, e);
+          failCount++;
+        }
+      }
+
+      // Show result
+      if (failCount === 0) {
+        alert(`Successfully assigned rider to ${successCount} invoice(s)`);
+      } else {
+        alert(`Assigned rider to ${successCount} invoice(s). Failed for ${failCount} invoice(s).`);
+      }
+
+      // Clear selection and refresh
+      setSelectedIds(new Set());
+      setShowBulkRiderModal(false);
+      window.location.reload();
+    } catch (e) {
+      console.error(e);
+      alert('Bulk assign failed');
+    } finally {
+      setBulkAssigning(false);
+    }
+  }, [base, selectedIds, rows]);
+
   const updatePhoneNumber = useCallback(async () => {
     if (!selectedInvoiceForPhone || !newPhoneNumber.trim()) {
       alert('Please enter a phone number');
@@ -1149,27 +1225,40 @@ function OrdersInner() {
         <>
         {/* Bulk Actions Bar */}
         {selectedIds.size > 0 && (
-          <div className="mb-4 bg-gradient-to-r from-red-50 to-orange-50 rounded-lg shadow-sm border-2 border-red-200 p-4">
+          <div className="mb-4 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg shadow-sm border-2 border-blue-200 p-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <span className="text-sm font-semibold text-red-900">
+                <span className="text-sm font-semibold text-blue-900">
                   {selectedIds.size} invoice(s) selected
                 </span>
                 <button
                   onClick={() => setSelectedIds(new Set())}
-                  className="text-xs text-red-700 hover:text-red-800 underline"
+                  className="text-xs text-blue-700 hover:text-blue-800 underline"
                 >
                   Clear selection
                 </button>
               </div>
-              <button
-                onClick={bulkDeleteInvoices}
-                disabled={bulkDeleting}
-                className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium"
-              >
-                <Trash2 size={16} />
-                {bulkDeleting ? 'Deleting...' : `Delete ${selectedIds.size} Selected`}
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    loadRiders();
+                    setShowBulkRiderModal(true);
+                  }}
+                  disabled={bulkAssigning}
+                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+                >
+                  <Truck size={16} />
+                  {bulkAssigning ? 'Assigning...' : `Assign Rider to ${selectedIds.size}`}
+                </button>
+                <button
+                  onClick={bulkDeleteInvoices}
+                  disabled={bulkDeleting}
+                  className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+                >
+                  <Trash2 size={16} />
+                  {bulkDeleting ? 'Deleting...' : `Delete ${selectedIds.size}`}
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -1920,6 +2009,77 @@ function OrdersInner() {
                 {updatingPhone ? 'Updating...' : 'Update Phone'}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Rider Assignment Modal */}
+      {showBulkRiderModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full max-h-[90vh] flex flex-col">
+            <div className="px-6 py-4 border-b flex items-center justify-between">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900">Assign Rider to Selected Invoices</h3>
+                <p className="text-sm text-gray-600 mt-1">
+                  Assigning rider to {selectedIds.size} selected invoice(s)
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  setShowBulkRiderModal(false);
+                }}
+                disabled={bulkAssigning}
+                className="text-gray-400 hover:text-gray-600 disabled:opacity-50"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-6">
+              {loadingRiders ? (
+                <div className="flex items-center justify-center py-12">
+                  <div className="text-sm text-gray-600">Loading riders...</div>
+                </div>
+              ) : riders.length === 0 ? (
+                <div className="text-center py-12">
+                  <p className="text-sm text-gray-600">No riders available</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {riders.map((r) => (
+                    <button
+                      key={r.user_id}
+                      onClick={() => bulkAssignRider(r.user_id)}
+                      disabled={bulkAssigning}
+                      className="w-full p-4 border-2 border-gray-200 rounded-lg hover:border-blue-500 hover:bg-blue-50 transition-all text-left disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className="font-medium text-gray-900">{r.name || r.email}</div>
+                          {r.cellnumber && (
+                            <div className="text-sm text-gray-600 mt-1">📱 {r.cellnumber}</div>
+                          )}
+                          {r.assigned_count !== undefined && (
+                            <div className="text-xs text-gray-500 mt-1">
+                              Currently assigned: {r.assigned_count} order(s)
+                            </div>
+                          )}
+                        </div>
+                        <Truck size={20} className="text-gray-400" />
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {bulkAssigning && (
+              <div className="px-6 py-4 border-t bg-blue-50">
+                <p className="text-sm text-blue-900 font-medium text-center">
+                  Assigning riders to selected invoices...
+                </p>
+              </div>
+            )}
           </div>
         </div>
       )}
