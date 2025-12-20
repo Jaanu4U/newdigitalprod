@@ -135,20 +135,12 @@ export default function CustomersPage() {
         })
       );
       
-      console.log('[Customers] Maps API response status:', mapsRes.status);
-      
       if (mapsRes.ok) {
         const mapsData = await mapsRes.json();
-        console.log('[Customers] Maps API data:', mapsData);
         
         if (mapsData.enabled && mapsData.google_api_key) {
-          console.log('[Customers] Setting Google Maps API key:', mapsData.google_api_key.substring(0, 10) + '...');
           setGoogleMapsApiKey(mapsData.google_api_key);
-        } else {
-          console.log('[Customers] Maps not enabled or no API key:', { enabled: mapsData.enabled, hasKey: !!mapsData.google_api_key });
         }
-      } else {
-        console.error('[Customers] Failed to fetch maps API key:', mapsRes.status);
       }
       
       // Also fetch general settings for country code
@@ -172,25 +164,15 @@ export default function CustomersPage() {
 
   // Initialize Google Maps Autocomplete for Create form
   const initAutocomplete = () => {
-    console.log('[Customers] initAutocomplete called', { 
-      hasApiKey: !!googleMapsApiKey, 
-      hasWindow: typeof window !== 'undefined', 
-      hasInputRef: !!addressInputRef.current 
-    });
-    
     if (!googleMapsApiKey || typeof window === 'undefined' || !addressInputRef.current) {
-      console.log('[Customers] Missing requirements for autocomplete');
       return;
     }
     
     // Check if script already loaded
     if (!(window as any).google?.maps?.places) {
-      console.log('[Customers] Google Maps not loaded yet, loading script...');
-      
       // Check if script is already being loaded
       const existingScript = document.querySelector('script[src*="maps.googleapis.com"]');
       if (existingScript) {
-        console.log('[Customers] Script already exists, waiting for load...');
         existingScript.addEventListener('load', () => setTimeout(initAutocomplete, 100));
         return;
       }
@@ -198,22 +180,18 @@ export default function CustomersPage() {
       const script = document.createElement('script');
       const region = mapsCountry.toUpperCase();
       const scriptSrc = `https://maps.googleapis.com/maps/api/js?key=${googleMapsApiKey}&libraries=places&region=${region}`;
-      console.log('[Customers] Loading Google Maps script:', scriptSrc);
       
       script.src = scriptSrc;
       script.async = true;
       script.onload = () => {
-        console.log('[Customers] Google Maps script loaded successfully');
         setTimeout(initAutocomplete, 100);
       };
       script.onerror = (e) => {
-        console.error('[Customers] Failed to load Google Maps script:', e);
+        console.error('Failed to load Google Maps script');
       };
       document.head.appendChild(script);
       return;
     }
-
-    console.log('[Customers] Initializing Google Maps Autocomplete...');
     
     const options: any = { 
       fields: ['address_components', 'formatted_address', 'geometry']
@@ -347,18 +325,9 @@ export default function CustomersPage() {
     editAutocompleteRef.current = autocomplete;
   };
 
-  // Initialize autocomplete when API key is available
-  useEffect(() => {
-    if (googleMapsApiKey && typeof window !== 'undefined') {
-      console.log('[Customers] API key available, will init autocomplete when form opens');
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [googleMapsApiKey]);
-
   // Initialize autocomplete when create form is shown
   useEffect(() => {
     if (showCreateForm && googleMapsApiKey && typeof window !== 'undefined') {
-      console.log('[Customers] Create form opened, initializing autocomplete...');
       setTimeout(initAutocomplete, 200);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
