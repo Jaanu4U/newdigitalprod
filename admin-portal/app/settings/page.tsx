@@ -136,11 +136,9 @@ export default function SettingsPage() {
   const [savingPayment, setSavingPayment] = useState(false);
   const [savingUpi, setSavingUpi] = useState(false);
   const [savingEmail, setSavingEmail] = useState(false);
-  const [savingMaps, setSavingMaps] = useState(false);
 
   const [pay, setPay] = useState<PaymentSettings>({ enabled: false, provider: "", currency: "", public_key: "", secret_key: "" });
   const [email, setEmail] = useState<EmailSettings>({ enabled: false, provider: "SMTP", smtp_port: 587 });
-  const [maps, setMaps] = useState<MapsSettings>({ enabled: false, provider: "google", google_api_key: "" });
   const [business, setBusiness] = useState<BusinessSettings>({});
   const [providers, setProviders] = useState<ProviderSettings>({ enabled_provider_codes: [] });
   const [whatsapp, setWhatsApp] = useState<WhatsAppSettings>({ enabled: false, accounts: [] });
@@ -152,7 +150,6 @@ export default function SettingsPage() {
   const [showOrgSettings, setShowOrgSettings] = useState(false);
   const [showUpiSettings, setShowUpiSettings] = useState(false);
   const [showEmailSettings, setShowEmailSettings] = useState(false);
-  const [showMapsSettings, setShowMapsSettings] = useState(false);
   const [showBusinessSettings, setShowBusinessSettings] = useState(false);
   const [showProvidersSettings, setShowProvidersSettings] = useState(false);
   const [showWhatsAppSettings, setShowWhatsAppSettings] = useState(false);
@@ -266,12 +263,6 @@ export default function SettingsPage() {
         smtp_password: data.email_settings?.smtp_password || "",
         from_email: data.email_settings?.from_email || "",
       });
-      setMaps({
-        enabled: Boolean(data.maps_settings?.enabled) || false,
-        provider: data.maps_settings?.provider || "google",
-        google_api_key: data.maps_settings?.google_api_key || "",
-        google_api_key_present: data.maps_settings?.google_api_key_present || false,
-      } as any);
       setBusiness({
         gstin: data.business_settings?.gstin || "",
         company_registration: data.business_settings?.company_registration || "",
@@ -445,33 +436,6 @@ export default function SettingsPage() {
       setError(e.message || "Failed to save email settings");
     } finally {
       setSavingEmail(false);
-    }
-  };
-
-  const handleSaveMaps = async () => {
-    setError(null);
-    setSuccess(null);
-    setSavingMaps(true);
-    try {
-      // Prepare maps payload - exclude google_api_key if it's empty and one already exists
-      const mapsPayload: any = {
-        enabled: maps.enabled,
-        provider: maps.provider,
-      };
-      
-      // Only include google_api_key if it has a real value (not empty/masked)
-      if (maps.google_api_key && maps.google_api_key.trim() !== "" && !maps.google_api_key.includes("•")) {
-        mapsPayload.google_api_key = maps.google_api_key;
-      }
-      
-      await putOrgSettings({ maps_settings: mapsPayload });
-      await fetchOrgSettings(token);
-      setSuccess("Maps settings updated");
-      setTimeout(() => setSuccess(null), 3000);
-    } catch (e: any) {
-      setError(e.message || "Failed to save maps settings");
-    } finally {
-      setSavingMaps(false);
     }
   };
 
@@ -1037,101 +1001,6 @@ export default function SettingsPage() {
                   className="inline-flex items-center gap-2 px-6 py-2 rounded-md bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
                 >
                   {savingEmail ? (
-                    <>
-                      <Loader2 size={16} className="animate-spin" />
-                      Saving...
-                    </>
-                  ) : (
-                    <>
-                      <Save size={16} />
-                      Save Changes
-                    </>
-                  )}
-                </button>
-              </div>
-              </div>
-              )}
-            </div>
-
-            {/* Maps Settings */}
-            <div className="bg-white rounded-lg border border-gray-200 shadow-sm mb-6">
-              <button
-                type="button"
-                onClick={() => setShowMapsSettings(!showMapsSettings)}
-                className="w-full flex items-center justify-between p-6 hover:bg-gray-50 transition-colors text-left"
-              >
-                <div className="flex items-center gap-3 flex-1">
-                  <div className="h-10 w-10 rounded-full bg-green-600 flex items-center justify-center">
-                    <MapPin size={20} className="text-white" />
-                  </div>
-                  <div className="text-left flex-1">
-                    <div className="flex items-center gap-2">
-                      <h3 className="text-lg font-semibold text-gray-900">Google Maps Settings</h3>
-                      <span className={`px-2 py-1 text-xs font-medium rounded-full ${(maps as any).google_api_key_present || maps.google_api_key ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>
-                        {(maps as any).google_api_key_present || maps.google_api_key ? 'Configured' : 'Not Configured'}
-                      </span>
-                    </div>
-                    <p className="text-sm text-gray-500">Configure maps and location services</p>
-                  </div>
-                </div>
-                {showMapsSettings ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
-              </button>
-              
-              {showMapsSettings && (
-              <div className="px-6 pb-6 border-t">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-6">
-                <label className="inline-flex items-center gap-2 text-sm text-gray-700">
-                  <input type="checkbox" checked={!!maps.enabled} onChange={(e) => setMaps({ ...maps, enabled: e.target.checked })} />
-                  Enable Maps
-                </label>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Provider</label>
-                  <input value={maps.provider || "google"} onChange={(e) => setMaps({ ...maps, provider: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md" />
-                </div>
-                <div className="md:col-span-2">
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Google Maps API Key
-                  </label>
-                  
-                  {(maps as any).google_api_key_present ? (
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2 p-3 bg-green-50 border border-green-200 rounded-md">
-                        <div className="flex-shrink-0 w-2 h-2 bg-green-500 rounded-full"></div>
-                        <span className="text-sm font-medium text-green-700">API Key Saved</span>
-                        <span className="text-xs text-green-600 ml-auto">••••••••••••••••</span>
-                      </div>
-                      <input 
-                        type="password"
-                        value={maps.google_api_key || ""} 
-                        onChange={(e) => setMaps({ ...maps, google_api_key: e.target.value })} 
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-500" 
-                        placeholder="Enter new API key to replace existing one (optional)" 
-                      />
-                    </div>
-                  ) : (
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2 p-3 bg-yellow-50 border border-yellow-200 rounded-md">
-                        <div className="flex-shrink-0 w-2 h-2 bg-yellow-500 rounded-full"></div>
-                        <span className="text-sm font-medium text-yellow-700">No API Key Configured</span>
-                      </div>
-                      <input 
-                        type="password"
-                        value={maps.google_api_key || ""} 
-                        onChange={(e) => setMaps({ ...maps, google_api_key: e.target.value })} 
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-500" 
-                        placeholder="Enter Google Maps API key (AIza...)" 
-                      />
-                    </div>
-                  )}
-                </div>
-              </div>
-              <div className="flex justify-end pt-4 border-t mt-4">
-                <button
-                  onClick={handleSaveMaps}
-                  disabled={savingMaps}
-                  className="inline-flex items-center gap-2 px-6 py-2 rounded-md bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
-                >
-                  {savingMaps ? (
                     <>
                       <Loader2 size={16} className="animate-spin" />
                       Saving...
