@@ -6,11 +6,22 @@ import os
 import uuid
 from datetime import datetime
 from ..deps import get_current_user
+from .. import models
+from sqlalchemy.orm import Session
+from ..db import get_db
 
 router = APIRouter()
 
 WHATSAPP_SERVICE_URL = "http://localhost:3001"
-GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY", "AIzaSyDJVgqPI6Gbu1YXxMBZnJazQ43r7O9nmv0")
+
+def get_google_maps_api_key(db: Session):
+    """Get Google Maps API key from global platform settings"""
+    platform_row = db.query(models.PlatformSettings).order_by(models.PlatformSettings.id.asc()).first()
+    if not platform_row:
+        return os.getenv("GOOGLE_MAPS_API_KEY", "AIzaSyDJVgqPI6Gbu1YXxMBZnJazQ43r7O9nmv0")
+    cfg = platform_row.email_config or {}
+    maps = cfg.get('maps_config') or {}
+    return maps.get("google_api_key") or os.getenv("GOOGLE_MAPS_API_KEY", "AIzaSyDJVgqPI6Gbu1YXxMBZnJazQ43r7O9nmv0")
 
 class InitSessionRequest(BaseModel):
     session_id: str
@@ -118,7 +129,7 @@ def _normalize_phone(number: Optional[str]) -> Optional[str]:
 
 
 @router.post("/v1/whatsapp/get-location")
-async def get_location(req: GetLocationRequest, current_user = Depends(get_current_user)):
+async def get_location(req: GetLocationRequest, current_user = Depends(get_current_user), db: Session = Depends(get_db)):
     """Get location from WhatsApp messages and convert to address"""
     print(f"[Backend] get-location request: session_id={req.session_id}, phone_number={req.phone_number}, invoice_id={req.invoice_id}")
     try:
@@ -153,7 +164,7 @@ async def get_location(req: GetLocationRequest, current_user = Depends(get_curre
                     "https://maps.googleapis.com/maps/api/geocode/json",
                     params={
                         "latlng": f"{latitude},{longitude}",
-                        "key": GOOGLE_MAPS_API_KEY
+                        "key": get_google_maps_api_key(db)
                     },
                     timeout=10.0
                 )

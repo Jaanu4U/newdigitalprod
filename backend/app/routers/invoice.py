@@ -607,11 +607,13 @@ async def bulk_upload_invoices(
     warnings: List[Dict[str, Any]] = []
     upload_batch_id = str(uuid.uuid4())  # Track this bulk upload session
     
-    # Fetch Google API key from org settings for geocoding
-    org = db.query(models.Organization).filter(models.Organization.org_id == principal.org_id).first()
+    # Fetch Google API key from global platform settings for geocoding
+    platform_row = db.query(models.PlatformSettings).order_by(models.PlatformSettings.id.asc()).first()
     google_api_key = None
-    if org and org.settings and isinstance(org.settings, dict):
-        google_api_key = org.settings.get("google_api_key")
+    if platform_row:
+        cfg = platform_row.email_config or {}
+        maps = cfg.get('maps_config') or {}
+        google_api_key = maps.get("google_api_key")
     
     # Create bulk upload log entry
     upload_log = models.SyncLog(

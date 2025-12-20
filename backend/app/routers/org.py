@@ -365,53 +365,44 @@ def get_org_settings(request: Request, principal: CurrentPrincipal = Depends(get
 
 @router.get("/maps-api-key")
 def get_maps_api_key(request: Request, principal: CurrentPrincipal = Depends(get_current_principal), db: Session = Depends(get_db)):
-    """Get the unmasked Google Maps API key for frontend use (requires authentication)"""
-    # Resolve current org
-    org = None
-    if principal.org_id:
-        org = db.query(models.Organization).filter(models.Organization.org_id == principal.org_id).first()
-    if org is None:
-        org = resolve_tenant(request, db)
-    if org is None:
-        raise HTTPException(status_code=404, detail="Organization not found")
+    """Get the unmasked Google Maps API key for frontend use (requires authentication) - Uses global platform settings"""
+    # Get global platform settings
+    platform_row = db.query(models.PlatformSettings).order_by(models.PlatformSettings.id.asc()).first()
+    if not platform_row:
+        # Return default fallback
+        return {
+            "google_api_key": "AIzaSyDJVgqPI6Gbu1YXxMBZnJazQ43r7O9nmv0",
+            "enabled": True,
+            "provider": "google"
+        }
     
-    # Get maps settings
-    s = org.settings or {}
-    maps = s.get("maps") or s.get("maps_settings") or {}
+    cfg = platform_row.email_config or {}
+    maps = cfg.get('maps_config') or {}
     
-    # Return the unmasked API key
+    # Return the unmasked API key from global settings
     return {
-        "google_api_key": maps.get("google_api_key"),
-        "enabled": maps.get("enabled", False),
+        "google_api_key": maps.get("google_api_key") or "AIzaSyDJVgqPI6Gbu1YXxMBZnJazQ43r7O9nmv0",
+        "enabled": maps.get("enabled", True),
         "provider": maps.get("provider", "google")
     }
 
 
 @router.get("/geocode")
 def geocode_address(address: str = Query(..., description="Address to geocode"), request: Request = None, principal: CurrentPrincipal = Depends(get_current_principal), db: Session = Depends(get_db)):
-    """Geocode an address to lat/lng coordinates using Google Maps API"""
+    """Geocode an address to lat/lng coordinates using Google Maps API - Uses global platform settings"""
     import urllib.parse
     import urllib.request
     import json
     
-    # Resolve current org
-    org = None
-    print(f"[Geocode] principal.org_id = {principal.org_id}")
-    if principal.org_id:
-        org = db.query(models.Organization).filter(models.Organization.org_id == principal.org_id).first()
-        print(f"[Geocode] Found org by principal: {org.name if org else 'None'}")
-    if org is None and request:
-        print(f"[Geocode] Trying to resolve tenant from request")
-        org = resolve_tenant(request, db)
-        print(f"[Geocode] Resolved org: {org.name if org else 'None'}")
-    if org is None:
-        print(f"[Geocode] ERROR: Organization not found! principal.org_id={principal.org_id}")
-        raise HTTPException(status_code=404, detail="Organization not found")
-    
-    # Get maps settings
-    s = org.settings or {}
-    maps = s.get("maps") or s.get("maps_settings") or {}
-    api_key = maps.get("google_api_key")
+    # Get global platform settings
+    platform_row = db.query(models.PlatformSettings).order_by(models.PlatformSettings.id.asc()).first()
+    if not platform_row:
+        # Use fallback API key
+        api_key = "AIzaSyDJVgqPI6Gbu1YXxMBZnJazQ43r7O9nmv0"
+    else:
+        cfg = platform_row.email_config or {}
+        maps = cfg.get('maps_config') or {}
+        api_key = maps.get("google_api_key") or "AIzaSyDJVgqPI6Gbu1YXxMBZnJazQ43r7O9nmv0"
     
     if not api_key:
         raise HTTPException(status_code=400, detail="Google Maps API key not configured")
