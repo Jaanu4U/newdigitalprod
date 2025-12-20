@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from typing import Dict, Any
+from sqlalchemy import func
+from typing import Dict, Any, List
 import re
 import httpx
 from pydantic import BaseModel
@@ -186,3 +187,36 @@ def update_maps_config(payload: MapsConfigIn, principal: CurrentPrincipal = Depe
         'enabled': maps.get('enabled', False),
         'provider': maps.get('provider', 'google')
     }
+
+
+@router.get('/organizations', response_model=List[Dict[str, Any]])
+def get_organizations(principal: CurrentPrincipal = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Get all organizations with Maps API usage stats (SuperAdmin only)"""
+    _require_superadmin(principal)
+    
+    # Get all organizations
+    orgs = db.query(models.Organization).order_by(models.Organization.created_at.desc()).all()
+    
+    result = []
+    for org in orgs:
+        # Get user count
+        user_count = db.query(func.count(models.User.user_id)).filter(
+            models.User.org_id == org.org_id
+        ).scalar() or 0
+        
+        result.append({
+            'org_id': org.org_id,
+            'name': org.name,
+            'slug': org.slug,
+            'custom_domain': org.custom_domain,
+            'plan': org.plan,
+            'status': org.status,
+            'region': org.region,
+            'timezone': org.timezone,
+            'maps_api_usage_count': org.maps_api_usage_count or 0,
+            'user_count': user_count,
+            'created_at': org.created_at.isoformat() if org.created_at else None,
+            'updated_at': org.updated_at.isoformat() if org.updated_at else None,
+        })
+    
+    return result

@@ -38,6 +38,7 @@ class Organization(Base):
     state = Column(String, nullable=True)
     pincode = Column(String, nullable=True)
     country = Column(String, nullable=True)
+    maps_api_usage_count = Column(Integer, default=0)
 
     users = relationship("User", back_populates="org")
 
@@ -202,5 +203,14 @@ class Payment(Base):
     # Metadata
     notes = Column(Text, nullable=True)
     receipt_url = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class MapsApiUsage(Base):
+    __tablename__ = "maps_api_usage"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    org_id = Column(String, ForeignKey("organizations.org_id", ondelete="CASCADE"), nullable=False, index=True)
+    endpoint = Column(String(255), nullable=False)
+    request_count = Column(Integer, default=1)
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

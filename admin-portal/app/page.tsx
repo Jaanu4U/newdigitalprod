@@ -14,6 +14,12 @@ type OrgSettings = {
   timezone?: string;
 };
 
+type MapsUsage = {
+  total_usage: number;
+  usage_by_endpoint: Array<{ endpoint: string; requests: number }>;
+  daily_usage_last_7_days: Array<{ date: string; requests: number }>;
+};
+
 type User = { role: string };
 
 export default function Dashboard() {
@@ -24,6 +30,7 @@ export default function Dashboard() {
 
   const [org, setOrg] = useState<OrgSettings | null>(null);
   const [userStats, setUserStats] = useState<{ total: number; admins: number; managers: number; riders: number } | null>(null);
+  const [mapsUsage, setMapsUsage] = useState<MapsUsage | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -85,9 +92,10 @@ export default function Dashboard() {
     try {
       // Fetch in parallel
       const h = withTenantHeaders({ headers: { Authorization: `Bearer ${token}` } });
-      const [orgRes, usersRes] = await Promise.all([
+      const [orgRes, usersRes, mapsRes] = await Promise.all([
         fetch(`${base}org/settings`, h),
         fetch(`${base}org/users`, h),
+        fetch(`${base}org/maps-usage`, h),
       ]);
       if (!orgRes.ok) throw new Error(`Org HTTP ${orgRes.status}`);
       const orgJson = await orgRes.json();
@@ -102,6 +110,13 @@ export default function Dashboard() {
         setUserStats({ total, admins, managers, riders });
       } else {
         setUserStats(null);
+      }
+      
+      if (mapsRes.ok) {
+        const mapsData = await mapsRes.json();
+        setMapsUsage(mapsData);
+      } else {
+        setMapsUsage(null);
       }
     } catch (e: any) {
       setError(e.message || 'Failed to load dashboard');
@@ -134,7 +149,7 @@ export default function Dashboard() {
       )}
 
       {authed && (
-        <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
             <div className="text-xs text-gray-500">Organization</div>
             <div className="mt-1 text-lg font-semibold text-gray-900 truncate">{org?.name || '—'}</div>
@@ -154,6 +169,21 @@ export default function Dashboard() {
             <div className="text-xs text-gray-500">Region & Timezone</div>
             <div className="mt-1 text-lg font-semibold text-gray-900">{org?.region || '—'}</div>
             <div className="mt-1 text-sm text-gray-600">{org?.timezone || '—'}</div>
+          </div>
+          
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
+            <div className="text-xs text-gray-500">Google Maps API Usage</div>
+            <div className="mt-1 text-2xl font-semibold text-gray-900">{mapsUsage?.total_usage?.toLocaleString() ?? '—'}</div>
+            <div className="mt-1 text-sm text-gray-600">Total requests</div>
+            {mapsUsage && mapsUsage.usage_by_endpoint && mapsUsage.usage_by_endpoint.length > 0 && (
+              <div className="mt-2 space-y-1">
+                {mapsUsage.usage_by_endpoint.slice(0, 2).map((item) => (
+                  <div key={item.endpoint} className="text-xs text-gray-500">
+                    {item.endpoint}: <span className="font-medium">{item.requests.toLocaleString()}</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </section>
       )}

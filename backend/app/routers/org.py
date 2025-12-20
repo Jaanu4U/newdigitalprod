@@ -27,6 +27,42 @@ def _slugify(name: str) -> str:
     s = re.sub(r"-+", "-", s)
     return s.strip("-")[:48] or "org"
 
+def track_maps_usage(db: Session, org_id: str, endpoint: str):
+    """Track Google Maps API usage for an organization"""
+    try:
+        # Update organization total count
+        org = db.query(models.Organization).filter(models.Organization.org_id == org_id).first()
+        if org:
+            if org.maps_api_usage_count is None:
+                org.maps_api_usage_count = 0
+            org.maps_api_usage_count += 1
+        
+        # Check if usage entry exists for today
+        today = datetime.utcnow().date()
+        usage = db.query(models.MapsApiUsage).filter(
+            models.MapsApiUsage.org_id == org_id,
+            models.MapsApiUsage.endpoint == endpoint,
+            func.date(models.MapsApiUsage.created_at) == today
+        ).first()
+        
+        if usage:
+            usage.request_count += 1
+            usage.updated_at = datetime.utcnow()
+        else:
+            usage = models.MapsApiUsage(
+                org_id=org_id,
+                endpoint=endpoint,
+                request_count=1
+            )
+            db.add(usage)
+        
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        # Don't fail the main request if tracking fails
+        print(f"Failed to track Maps usage: {e}")
+
+
 
 @router.post("/register", response_model=schemas.OrgRegisterOut)
 def register_org(payload: schemas.OrgRegisterIn, db: Session = Depends(get_db)):
@@ -394,6 +430,10 @@ def geocode_address(address: str = Query(..., description="Address to geocode"),
     import urllib.request
     import json
     
+    # Track usage
+    if principal.org_id:
+        track_maps_usage(db, principal.org_id, "geocode")
+    
     # Get global platform settings
     platform_row = db.query(models.PlatformSettings).order_by(models.PlatformSettings.id.asc()).first()
     if not platform_row:
@@ -501,6 +541,53 @@ def get_estimated_delivery_time(
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Distance calculation error: {str(e)}")
+
+
+@router.get("/maps-usage")
+def get_maps_usage(
+    request: Request,
+    principal: CurrentPrincipal = Depends(get_current_principal),
+    db: Session = Depends(get_db)
+):
+    """Get Google Maps API usage statistics for the current organization"""
+    if not principal.org_id:
+        raise HTTPException(status_code=403, detail="Organization context required")
+    
+    org = db.query(models.Organization).filter(models.Organization.org_id == principal.org_id).first()
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    
+    # Get usage breakdown by endpoint for last 30 days
+    thirty_days_ago = datetime.utcnow() - timedelta(days=30)
+    usage_by_endpoint = db.query(
+        models.MapsApiUsage.endpoint,
+        func.sum(models.MapsApiUsage.request_count).label('total_requests')
+    ).filter(
+        models.MapsApiUsage.org_id == principal.org_id,
+        models.MapsApiUsage.created_at >= thirty_days_ago
+    ).group_by(models.MapsApiUsage.endpoint).all()
+    
+    # Get daily usage for last 7 days
+    seven_days_ago = datetime.utcnow() - timedelta(days=7)
+    daily_usage = db.query(
+        func.date(models.MapsApiUsage.created_at).label('date'),
+        func.sum(models.MapsApiUsage.request_count).label('total_requests')
+    ).filter(
+        models.MapsApiUsage.org_id == principal.org_id,
+        models.MapsApiUsage.created_at >= seven_days_ago
+    ).group_by(func.date(models.MapsApiUsage.created_at)).order_by(func.date(models.MapsApiUsage.created_at)).all()
+    
+    return {
+        "total_usage": org.maps_api_usage_count or 0,
+        "usage_by_endpoint": [
+            {"endpoint": endpoint, "requests": int(count)}
+            for endpoint, count in usage_by_endpoint
+        ],
+        "daily_usage_last_7_days": [
+            {"date": str(date), "requests": int(count)}
+            for date, count in daily_usage
+        ]
+    }
 
 
 @router.put("/settings", response_model=dict)

@@ -20,12 +20,17 @@ from ..tenancy import resolve_tenant
 from ..core import settings
 
 
-async def geocode_address(address: str, google_api_key: str = None) -> tuple[float, float] | None:
-    """Geocode an address using Google Maps API"""
+async def geocode_address(address: str, google_api_key: str = None, org_id: str = None, db: Session = None) -> tuple[float, float] | None:
+    """Geocode an address using Google Maps API and track usage"""
     if not address or not google_api_key:
         return None
     
     try:
+        # Track usage if org_id and db provided
+        if org_id and db:
+            from .org import track_maps_usage
+            track_maps_usage(db, org_id, "bulk_geocode")
+        
         async with httpx.AsyncClient() as client:
             response = await client.get(
                 "https://maps.googleapis.com/maps/api/geocode/json",
@@ -898,7 +903,7 @@ async def bulk_upload_invoices(
                     # Use shipping address if available, otherwise use billing address
                     address_to_geocode = customer_data.get("shipping_address") or customer_data["address"]
                     if address_to_geocode:
-                        coords = await geocode_address(address_to_geocode, google_api_key)
+                        coords = await geocode_address(address_to_geocode, google_api_key, principal.org_id, db)
                         if coords:
                             customer.latitude = str(coords[0])
                             customer.longitude = str(coords[1])
@@ -925,7 +930,7 @@ async def bulk_upload_invoices(
                     if google_api_key:
                         address_to_geocode = customer_data.get("shipping_address") or customer_data["address"]
                         if address_to_geocode:
-                            coords = await geocode_address(address_to_geocode, google_api_key)
+                            coords = await geocode_address(address_to_geocode, google_api_key, principal.org_id, db)
                             if coords:
                                 customer.latitude = str(coords[0])
                                 customer.longitude = str(coords[1])
