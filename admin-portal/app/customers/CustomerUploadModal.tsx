@@ -23,20 +23,30 @@ export default function CustomerUploadModal({ base, onClose, onSuccess }: Custom
 
   const downloadTemplate = () => {
     const b2cHeaders = 'customer_id,name,email,phone,address,city,state,pin,notes';
-    const b2cSample = 'CUST01,John Doe,john@example.com,9876543210,"123 Main St",Mumbai,Maharashtra,400001,VIP customer';
+    const b2cSamples = [
+      'CUST01,Rajesh Kumar,rajesh.k@gmail.com,9876543210,"12-3-456, Banjara Hills",Hyderabad,Telangana,500034,Regular customer',
+      'CUST02,Priya Sharma,priya.sharma@yahoo.com,9988776655,"Plot 789, Jubilee Hills",Hyderabad,Telangana,500033,Premium customer',
+      'CUST03,Amit Patel,amit.patel@outlook.com,8877665544,"Flat 101, Hitech City",Hyderabad,Telangana,500081,VIP customer',
+      ',Sunita Reddy,sunita@example.com,7766554433,"House 456, Madhapur",Hyderabad,Telangana,500081,Auto-generated ID example'
+    ];
     
     const b2bHeaders = 'customer_id,company_name,name,gstin,email,phone,address,city,state,pin,notes';
-    const b2bSample = 'CORP01,ABC Corp,John Doe,29ABCDE1234F1Z5,contact@abc.com,9876543210,"456 Business Park",Bangalore,Karnataka,560001,Corporate client';
+    const b2bSamples = [
+      'CORP01,Tech Solutions Pvt Ltd,Vikram Rao,36AABCT1234F1Z5,contact@techsol.com,9876543210,"Tower A, Cyber Gateway",Hyderabad,Telangana,500081,IT Services',
+      'CORP02,Global Exports Inc,Meera Shah,29AACCE5678G2Y4,info@globalexports.com,9988776655,"Export House, HITEC City",Hyderabad,Telangana,500081,Export business',
+      'CORP03,Smart Retail Chain,Arjun Khanna,27AADCS9012H3X3,sales@smartretail.in,8877665544,"Retail Plaza, Gachibowli",Hyderabad,Telangana,500032,Retail chain',
+      ',Manufacturing Co,Deepak Verma,36AAFCM3456K4W2,orders@mfgco.com,7766554433,"Industrial Area, Patancheru",Hyderabad,Telangana,502319,Auto-generated ID example'
+    ];
     
     const content = customerType === 'b2b' 
-      ? `${b2bHeaders}\n${b2bSample}`
-      : `${b2cHeaders}\n${b2cSample}`;
+      ? `${b2bHeaders}\n${b2bSamples.join('\n')}`
+      : `${b2cHeaders}\n${b2cSamples.join('\n')}`;
     
     const blob = new Blob([content], { type: 'text/csv' });
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${customerType}_customers_template.csv`;
+    a.download = `${customerType}_customers_sample.csv`;
     a.click();
     window.URL.revokeObjectURL(url);
   };
@@ -153,19 +163,22 @@ export default function CustomerUploadModal({ base, onClose, onSuccess }: Custom
             <div className="flex items-start gap-3">
               <Download className="text-blue-600 mt-0.5" size={20} />
               <div className="flex-1">
-                <h3 className="font-semibold text-blue-900 text-sm">Step 1: Download Template</h3>
+                <h3 className="font-semibold text-blue-900 text-sm">Step 1: Download Sample File</h3>
                 <p className="text-sm text-blue-700 mt-1">
                   {customerType === 'b2c' 
-                    ? 'Download the B2C template with columns: customer_id (optional), name, email, phone, address, city, state, pin, notes'
-                    : 'Download the B2B template with columns: customer_id (optional), company_name, name, gstin, email, phone, address, city, state, pin, notes'
+                    ? 'Download sample CSV file with example B2C customers. Columns: customer_id (optional), name, email, phone, address, city, state, pin, notes'
+                    : 'Download sample CSV file with example B2B customers. Columns: customer_id (optional), company_name, name, gstin, email, phone, address, city, state, pin, notes'
                   }
+                </p>
+                <p className="text-xs text-blue-600 mt-2 font-medium">
+                  💡 Tip: You can edit the sample file in Excel or any spreadsheet app, or create your own CSV following the same format.
                 </p>
                 <button
                   onClick={downloadTemplate}
                   className="mt-3 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium flex items-center gap-2"
                 >
                   <Download size={16} />
-                  Download {customerType.toUpperCase()} Template
+                  Download {customerType.toUpperCase()} Sample CSV
                 </button>
               </div>
             </div>
