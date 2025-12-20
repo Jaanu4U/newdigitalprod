@@ -16,5 +16,22 @@ services:
       timeout: 5s
       retries: 5
 
+  whatsapp-service:
+    image: node:18-alpine
+    working_dir: /app
+    volumes:
+      - ./whatsapp-service:/app
+      - whatsapp-sessions:/app/.wwebjs_auth
+    ports:
+      - "3001:3001"
+    command: sh -c "npm install && node server.js"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
 volumes:
   pgdata:
+  whatsapp-sessions:

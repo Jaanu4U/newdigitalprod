@@ -1,5 +1,5 @@
 "use client";
-import { Suspense, useEffect, useState, useMemo } from "react";
+import { Suspense, useEffect, useState, useMemo, useCallback } from "react";
 import { apiBase } from "@/lib/api";
 import { withTenantHeaders, getTenantSlugFromHost } from "@/lib/tenant";
 import { useSearchParams } from "next/navigation";
@@ -193,7 +193,7 @@ function OrdersInner() {
     return () => { if (timeout) clearTimeout(timeout); };
   }, [base, slug, mounted, from]);
 
-  const loadRiders = async () => {
+  const loadRiders = useCallback(async () => {
     setLoadingRiders(true);
     try {
       const token = localStorage.getItem('dc_access') || '';
@@ -215,9 +215,9 @@ function OrdersInner() {
     } finally {
       setLoadingRiders(false);
     }
-  };
+  }, [base, rows]);
 
-  const handleAssignRider = async (riderId: string) => {
+  const handleAssignRider = useCallback(async (riderId: string) => {
     if (!selectedInvoice?.customer_id || !selectedInvoice?.invoice_id) return;
     setAssigning(true);
     try {
@@ -262,7 +262,7 @@ function OrdersInner() {
     } finally {
       setAssigning(false);
     }
-  };
+  }, [base, selectedInvoice, riders]);
 
   const handleSendWhatsApp = async (order: DraftRow) => {
     if (!whatsappEnabled || whatsappAccounts.length === 0) {
@@ -808,7 +808,7 @@ function OrdersInner() {
     setInvoiceUrl("");
   };
 
-  const deleteInvoice = async (invoiceId: number) => {
+  const deleteInvoice = useCallback(async (invoiceId: number) => {
     if (!confirm('Delete this invoice? This cannot be undone.')) return;
     
     try {
@@ -831,9 +831,9 @@ function OrdersInner() {
       console.error(e);
       alert('Failed to delete invoice');
     }
-  };
+  }, [base]);
 
-  const updatePhoneNumber = async () => {
+  const updatePhoneNumber = useCallback(async () => {
     if (!selectedInvoiceForPhone || !newPhoneNumber.trim()) {
       alert('Please enter a phone number');
       return;
@@ -882,7 +882,46 @@ function OrdersInner() {
     } finally {
       setUpdatingPhone(false);
     }
-  };
+  }, [base, selectedInvoiceForPhone, newPhoneNumber]);
+
+  // Memoize filtered data to avoid recalculating on every render
+  const filteredRows = useMemo(() => {
+    return rows.filter(r => {
+      // Search filter
+      if (searchTerm) {
+        const term = searchTerm.toLowerCase();
+        const matchInvoice = (r.invoice_no || '').toLowerCase().includes(term);
+        const matchPhone = (r.customer_phone || '').toLowerCase().includes(term);
+        const matchTracking = (r.shipment?.tracking_number || '').toLowerCase().includes(term);
+        const matchCustomerId = (r.customer_id || '').toLowerCase().includes(term);
+        if (!matchInvoice && !matchPhone && !matchTracking && !matchCustomerId) {
+          return false;
+        }
+      }
+      
+      // Status filter
+      if (statusFilter !== 'all') {
+        if (statusFilter === 'assigned' && !r.rider_name) return false;
+        if (statusFilter === 'shipped' && r.shipment?.status !== 'shipped') return false;
+        if (statusFilter === 'delivered' && r.shipment?.status !== 'delivered') return false;
+        if (statusFilter === 'pending' && (r.rider_name || r.shipment?.status)) return false;
+        if (statusFilter === 'with_address' && !r.delivery_address) return false;
+        if (statusFilter === 'no_address' && r.delivery_address) return false;
+      }
+      
+      return true;
+    });
+  }, [rows, searchTerm, statusFilter]);
+
+  // Memoize pagination data
+  const paginationData = useMemo(() => {
+    const totalPages = Math.ceil(filteredRows.length / itemsPerPage);
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    const endIndex = startIndex + itemsPerPage;
+    const paginatedRows = filteredRows.slice(startIndex, endIndex);
+    
+    return { totalPages, startIndex, endIndex, paginatedRows };
+  }, [filteredRows, currentPage, itemsPerPage]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 py-8">
@@ -1004,53 +1043,19 @@ function OrdersInner() {
           the API may not be updated; contact admin to deploy the latest backend.
         </div>
       )}
-      {rows.length > 0 && (() => {
-        // Apply filters
-        const filtered = rows.filter(r => {
-          // Search filter
-          if (searchTerm) {
-            const term = searchTerm.toLowerCase();
-            const matchInvoice = (r.invoice_no || '').toLowerCase().includes(term);
-            const matchPhone = (r.customer_phone || '').toLowerCase().includes(term);
-            const matchTracking = (r.shipment?.tracking_number || '').toLowerCase().includes(term);
-            const matchCustomerId = (r.customer_id || '').toLowerCase().includes(term);
-            if (!matchInvoice && !matchPhone && !matchTracking && !matchCustomerId) {
-              return false;
-            }
-          }
-          
-          // Status filter
-          if (statusFilter !== 'all') {
-            if (statusFilter === 'assigned' && !r.rider_name) return false;
-            if (statusFilter === 'shipped' && r.shipment?.status !== 'shipped') return false;
-            if (statusFilter === 'delivered' && r.shipment?.status !== 'delivered') return false;
-            if (statusFilter === 'pending' && (r.rider_name || r.shipment?.status)) return false;
-            if (statusFilter === 'with_address' && !r.delivery_address) return false;
-            if (statusFilter === 'no_address' && r.delivery_address) return false;
-          }
-          
-          return true;
-        });
-
-        // Pagination calculations
-        const totalPages = Math.ceil(filtered.length / itemsPerPage);
-        const startIndex = (currentPage - 1) * itemsPerPage;
-        const endIndex = startIndex + itemsPerPage;
-        const paginatedRows = filtered.slice(startIndex, endIndex);
-
-        return (
+      {rows.length > 0 && (
         <>
-          {filtered.length === 0 && (
+          {filteredRows.length === 0 && (
             <div className="text-sm text-gray-500 py-4">
               No orders match your search criteria.
             </div>
           )}
-          {filtered.length > 0 && (
+          {filteredRows.length > 0 && (
         <>
         <div className="mb-4 bg-white rounded-lg shadow-sm border border-gray-200 p-4">
           <div className="flex items-center justify-between text-sm">
             <div className="font-medium text-gray-700">
-              Showing <span className="text-blue-600">{startIndex + 1}</span> to <span className="text-blue-600">{Math.min(endIndex, filtered.length)}</span> of <span className="text-blue-600">{filtered.length}</span> orders
+              Showing <span className="text-blue-600">{paginationData.startIndex + 1}</span> to <span className="text-blue-600">{Math.min(paginationData.endIndex, filteredRows.length)}</span> of <span className="text-blue-600">{filteredRows.length}</span> orders
             </div>
             <div className="flex items-center gap-2">
               <label htmlFor="itemsPerPage" className="text-sm font-medium text-gray-700">Items per page:</label>
@@ -1084,7 +1089,7 @@ function OrdersInner() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200">
-              {paginatedRows.map(r => (
+              {paginationData.paginatedRows.map(r => (
                 <tr key={r.id} className="hover:bg-blue-50 transition-colors">
                   <td className="px-3 py-3">
                     <div className="font-semibold text-gray-900">{r.invoice_no || '-'}</div>
@@ -1275,7 +1280,7 @@ function OrdersInner() {
         </div>
         
         {/* Pagination Controls */}
-        {totalPages > 1 && (
+        {paginationData.totalPages > 1 && (
           <div className="mt-4 bg-white rounded-lg shadow-sm border border-gray-200 p-4">
             <div className="flex items-center justify-between">
               <button
@@ -1287,9 +1292,9 @@ function OrdersInner() {
               </button>
               
               <div className="flex items-center gap-2">
-              {Array.from({ length: totalPages }, (_, i) => i + 1).map(page => {
+              {Array.from({ length: paginationData.totalPages }, (_, i) => i + 1).map(page => {
                 // Show first page, last page, current page, and pages around current
-                const showPage = page === 1 || page === totalPages || 
+                const showPage = page === 1 || page === paginationData.totalPages || 
                   (page >= currentPage - 2 && page <= currentPage + 2);
                 
                 if (!showPage) {
@@ -1317,8 +1322,8 @@ function OrdersInner() {
             </div>
             
             <button
-              onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-              disabled={currentPage === totalPages}
+              onClick={() => setCurrentPage(p => Math.min(paginationData.totalPages, p + 1))}
+              disabled={currentPage === paginationData.totalPages}
               className="px-5 py-2.5 text-sm font-medium border-2 border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-gray-100 transition-all"
             >
               Next →
@@ -1329,8 +1334,7 @@ function OrdersInner() {
         </>
           )}
         </>
-        );
-      })()}
+      )}
 
       {/* Rider Assignment Modal */}
       {showRiderModal && (

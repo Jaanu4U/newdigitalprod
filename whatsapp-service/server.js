@@ -242,27 +242,50 @@ app.post('/api/whatsapp/get-location', async (req, res) => {
   }
 
   try {
-    // Format phone number
-    let formattedNumber = phoneNumber.replace(/[^\d+]/g, '');
-    if (!formattedNumber.startsWith('+')) {
-      formattedNumber = '+' + formattedNumber;
-    }
-    const chatId = formattedNumber.substring(1) + '@c.us';
+    // Format phone number - ensure it starts with country code
+    let formattedNumber = phoneNumber.replace(/[^\d]/g, '');
     
-    // Get chat
-    const chat = await client.getChatById(chatId);
+    // If number doesn't have country code, assume India (+91)
+    if (formattedNumber.length === 10) {
+      formattedNumber = '91' + formattedNumber;
+    }
+    
+    const chatId = formattedNumber + '@c.us';
+    console.log(`[get-location] Formatted chatId: ${chatId}`);
+    
+    // Try to get all chats and find the matching one
+    const chats = await client.getChats();
+    const matchingChat = chats.find(chat => 
+      chat.id._serialized === chatId || 
+      chat.id.user === formattedNumber
+    );
+    
+    if (!matchingChat) {
+      console.log(`[get-location] No chat found for ${chatId}`);
+      return res.status(404).json({ 
+        success: false,
+        error: 'No chat found with this number. Make sure you have a conversation with this contact.' 
+      });
+    }
+    
+    console.log(`[get-location] Chat found: ${matchingChat.id._serialized}`);
     
     // Fetch recent messages
-    const messages = await chat.fetchMessages({ limit: 50 });
+    const messages = await matchingChat.fetchMessages({ limit: 100 });
+    console.log(`[get-location] Fetched ${messages.length} messages`);
     
     // Find the most recent location message
     const locationMessage = messages.reverse().find(msg => msg.location);
     
     if (!locationMessage) {
+      console.log(`[get-location] No location message found in ${messages.length} messages`);
       return res.status(404).json({ 
-        error: 'No location found in recent messages' 
+        success: false,
+        error: 'No location found in recent messages. Please ask the customer to share their location via WhatsApp.' 
       });
     }
+    
+    console.log(`[get-location] Location found: ${locationMessage.location.latitude}, ${locationMessage.location.longitude}`);
     
     res.json({
       success: true,
@@ -272,8 +295,11 @@ app.post('/api/whatsapp/get-location', async (req, res) => {
       timestamp: locationMessage.timestamp
     });
   } catch (error) {
-    console.error('Error fetching location:', error);
-    res.status(500).json({ error: error.message });
+    console.error('[get-location] Error:', error.message);
+    res.status(500).json({ 
+      success: false,
+      error: error.message 
+    });
   }
 });
 
@@ -322,10 +348,45 @@ app.get('/api/whatsapp/sessions', (req, res) => {
   res.json({ sessions });
 });
 
+/**
+ * Auto-restore existing sessions on startup
+ */
+function autoRestoreSessions() {
+  try {
+    if (!fs.existsSync(SESSION_DIR)) {
+      console.log('No session directory found');
+      return;
+    }
+    
+    const sessionDirs = fs.readdirSync(SESSION_DIR);
+    console.log(`Found ${sessionDirs.length} stored sessions`);
+    
+    for (const dir of sessionDirs) {
+      if (dir.startsWith('session-')) {
+        const sessionId = dir.replace('session-', '');
+        console.log(`Restoring session: ${sessionId}`);
+        
+        // Initialize the client (it will auto-authenticate from stored session)
+        setTimeout(() => {
+          initializeClient(sessionId);
+        }, 1000); // Stagger initialization to avoid overwhelming the system
+      }
+    }
+  } catch (error) {
+    console.error('Error auto-restoring sessions:', error);
+  }
+}
+
 // Start server
 app.listen(PORT, () => {
   console.log(`WhatsApp service running on port ${PORT}`);
   console.log(`Session storage: ${SESSION_DIR}`);
+  
+  // Auto-restore existing sessions after a short delay
+  setTimeout(() => {
+    console.log('Auto-restoring existing sessions...');
+    autoRestoreSessions();
+  }, 2000);
 });
 
 // Graceful shutdown
