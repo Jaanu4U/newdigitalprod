@@ -116,7 +116,8 @@ export default function Dashboard() {
         const mapsData = await mapsRes.json();
         setMapsUsage(mapsData);
       } else {
-        setMapsUsage(null);
+        // Set default empty data structure if endpoint fails
+        setMapsUsage({ total_usage: 0, usage_by_endpoint: [], daily_usage_last_7_days: [] });
       }
     } catch (e: any) {
       setError(e.message || 'Failed to load dashboard');
@@ -173,7 +174,9 @@ export default function Dashboard() {
           
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
             <div className="text-xs text-gray-500">Google Maps API Usage</div>
-            <div className="mt-1 text-2xl font-semibold text-gray-900">{mapsUsage?.total_usage?.toLocaleString() ?? '—'}</div>
+            <div className="mt-1 text-2xl font-semibold text-gray-900">
+              {mapsUsage ? (mapsUsage.total_usage || 0).toLocaleString() : '—'}
+            </div>
             <div className="mt-1 text-sm text-gray-600">Total requests</div>
             {mapsUsage && mapsUsage.usage_by_endpoint && mapsUsage.usage_by_endpoint.length > 0 && (
               <div className="mt-2 space-y-1">
