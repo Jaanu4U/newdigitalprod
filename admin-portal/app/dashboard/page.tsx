@@ -17,6 +17,7 @@ type OrgSettings = {
 type MapsUsage = {
   total_usage: number;
   usage_by_endpoint: Array<{ endpoint: string; requests: number }>;
+  usage_by_role: Array<{ role: string; requests: number }>;
   daily_usage_last_7_days: Array<{ date: string; requests: number }>;
 };
 
@@ -241,16 +242,16 @@ export default function OrgAdminDashboard() {
                   {mapsUsage ? (mapsUsage.total_usage || 0).toLocaleString() : '—'}
                 </div>
                 <div className="text-xs text-gray-600">
-                  {mapsUsage && mapsUsage.usage_by_endpoint && mapsUsage.usage_by_endpoint.length > 0 ? (
+                  {mapsUsage && mapsUsage.usage_by_role && mapsUsage.usage_by_role.length > 0 ? (
                     <div className="space-y-1">
-                      {mapsUsage.usage_by_endpoint.slice(0, 2).map((item) => (
-                        <div key={item.endpoint}>
-                          {item.endpoint}: <span className="font-medium">{item.requests.toLocaleString()}</span>
+                      {mapsUsage.usage_by_role.map((item) => (
+                        <div key={item.role}>
+                          {item.role}: <span className="font-medium">{item.requests.toLocaleString()}</span>
                         </div>
                       ))}
                     </div>
                   ) : (
-                    <div>Total requests</div>
+                    <div>No usage data</div>
                   )}
                 </div>
               </div>

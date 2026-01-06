@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { usePathname } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import NavBar from "@/components/NavBar"
 import Sidebar from "@/components/Sidebar"
 import { getTenantSlugFromHost } from "@/lib/tenant"
@@ -12,19 +12,33 @@ export default function ClientLayout({
   children: React.ReactNode
 }) {
   const pathname = usePathname()
+  const router = useRouter()
   const [mounted, setMounted] = useState(true)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true)
+  const [isAuthenticated, setIsAuthenticated] = useState(false)
   const isLoginPage = pathname === '/login' || pathname === '/superadmin/login'
   const isSignupPage = pathname === '/signup'
   const isVerifyEmailPage = pathname === '/verify-email'
   const isVerifyPendingPage = pathname === '/verify-pending'
   const isSuperAdminPage = pathname?.startsWith('/superadmin')
+  const isCustomerPage = pathname?.startsWith('/customer/') || pathname === '/customer-login' || pathname === '/customer-register'
   const [isApexRoot, setIsApexRoot] = useState(true)
 
   // Mount effect
   useEffect(() => {
     setMounted(true)
   }, [])
+
+  // Check authentication status
+  useEffect(() => {
+    if (!mounted) return
+    try {
+      const token = localStorage.getItem('dc_token') || localStorage.getItem('dc_access')
+      setIsAuthenticated(!!token)
+    } catch {
+      setIsAuthenticated(false)
+    }
+  }, [mounted, pathname])
 
   // Load persisted collapse state
   useEffect(() => {
@@ -58,8 +72,14 @@ export default function ClientLayout({
     return <div className="min-h-screen">{children}</div>
   }
 
-  if (isLoginPage || isSignupPage || isVerifyEmailPage || isVerifyPendingPage || isApexRoot || isSuperAdminPage) {
-    // Clean pages - no navbar or sidebar
+  // Pages that should never show navbar/sidebar
+  const isPublicPage = isLoginPage || isSignupPage || isVerifyEmailPage || isVerifyPendingPage || isApexRoot || isSuperAdminPage || isCustomerPage
+  
+  // Hide navbar/sidebar on root path (/) ONLY when not authenticated (public landing page)
+  const isPublicRoot = pathname === '/' && !isAuthenticated
+  
+  // Don't show navbar/sidebar on public pages or unauthenticated root
+  if (isPublicPage || isPublicRoot) {
     return children
   }
 

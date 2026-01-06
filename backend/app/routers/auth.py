@@ -89,3 +89,76 @@ def refresh(payload: schemas.RefreshIn, db: Session = Depends(get_db)):
     new_access = create_token({"sub": user.user_id, "org_id": user.org_id, "role": user.role})
     new_refresh = create_token({"sub": user.user_id, "org_id": user.org_id, "type": "refresh"}, expires_in=60*60*24*30)
     return {"access_token": new_access, "refresh_token": new_refresh}
+
+
+@router.post("/customer-login", response_model=schemas.TokenOut)
+def customer_login(payload: schemas.CustomerLoginIn, request: Request, db: Session = Depends(get_db)):
+    """Customer portal login using email/phone and password"""
+    import logging
+    from datetime import datetime, timezone
+    logger = logging.getLogger(__name__)
+    
+    # Always resolve org from tenant (X-Org header or subdomain)
+    org = resolve_tenant(request, db)
+    if org is None:
+        raise HTTPException(status_code=400, detail="Organization not found. Please check the subdomain.")
+    
+    org_id = org.org_id
+    logger.info(f"Customer login attempt - identifier: {payload.email_or_phone}, org_id: {org_id}, org_slug: {org.slug}")
+
+    
+    # Try to find customer by email or phone in the specific organization
+    identifier = payload.email_or_phone.strip()
+    logger.info(f"Searching for customer with org_id={org_id}, identifier={identifier}")
+    
+    customer = db.query(models.Customer).filter(
+        models.Customer.org_id == org_id,
+        (models.Customer.email == identifier) | (models.Customer.phone == identifier)
+    ).first()
+    
+    if not customer:
+        logger.warning(f"Customer login failed - customer not found with identifier: {identifier} in org: {org_id}")
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    
+    # Check if customer has portal access enabled
+    if not customer.portal_access:
+        raise HTTPException(status_code=403, detail="Portal access not enabled for this account. Please contact support.")
+    
+    # Verify password
+    if not customer.password_hash or not verify_password(payload.password, customer.password_hash):
+        logger.warning(f"Customer login failed - invalid password for customer: {customer.customer_id}")
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    
+    # Check if email is verified (if email login)
+    if '@' in identifier and not customer.email_verified:
+        raise HTTPException(status_code=403, detail="Email not verified. Please verify your email before logging in.")
+    
+    # Update last login time
+    customer.last_login = datetime.now(timezone.utc)
+    db.commit()
+    
+    # Create tokens with customer role
+    access = create_token({
+        "sub": customer.customer_id,
+        "org_id": customer.org_id,
+        "role": "Customer",
+        "customer_type": customer.ctype
+    })
+    refresh = create_token({
+        "sub": customer.customer_id,
+        "org_id": customer.org_id,
+        "type": "refresh"
+    }, expires_in=60*60*24*30)
+    
+    return {
+        "access_token": access,
+        "refresh_token": refresh,
+        "user": {
+            "user_id": customer.customer_id,
+            "role": "Customer",
+            "name": customer.name or customer.company_name,
+            "email": customer.email,
+            "phone": customer.phone
+        },
+        "org_id": customer.org_id
+    }

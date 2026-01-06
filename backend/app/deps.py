@@ -32,6 +32,7 @@ def get_current_org_id(principal: CurrentPrincipal = Depends(get_current_princip
 def get_current_user(authorization: Optional[str] = Header(None)) -> CurrentPrincipal:
     """Like get_current_principal, but allows org_id to be None (for SuperAdmin)."""
     if not authorization or not authorization.lower().startswith("bearer "):
+        print(f"[Auth] Missing or invalid Authorization header: {authorization[:50] if authorization else 'None'}")
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
     token = authorization.split(" ", 1)[1]
     try:
@@ -39,10 +40,12 @@ def get_current_user(authorization: Optional[str] = Header(None)) -> CurrentPrin
         sub = payload.get("sub")
         org_id = payload.get("org_id")  # may be None for SuperAdmin
         role = payload.get("role")
+        print(f"[Auth] Decoded token: sub={sub}, org_id={org_id}, role={role}")
         if not sub:
             raise HTTPException(status_code=401, detail="Invalid token payload")
         return CurrentPrincipal(user_id=sub, org_id=org_id, role=role)
-    except JWTError:
+    except JWTError as e:
+        print(f"[Auth] JWT decode error: {str(e)}")
         raise HTTPException(status_code=401, detail="Invalid token")
 
 

@@ -51,6 +51,8 @@ def get_assigned_orders(principal: CurrentPrincipal = Depends(get_current_princi
     import logging
     logger = logging.getLogger("uvicorn")
     
+    logger.info(f"📱 [RIDER API] User: {principal.user_id}, Role: {principal.role}, OrgID: {principal.org_id}")
+    
     if (principal.role or '').lower() != 'rider':
         raise HTTPException(status_code=403, detail='Only riders can access this endpoint')
     
@@ -64,7 +66,7 @@ def get_assigned_orders(principal: CurrentPrincipal = Depends(get_current_princi
     for assignment in assignments:
         try:
             data = json.loads(assignment.payload or '{}')
-            if data.get('rider_user_id') == principal.user_id:
+            if data.get('rider_id') == principal.user_id:
                 # Check if delivered
                 delivery_logs = db.query(models.SyncLog).filter(
                     models.SyncLog.org_id == principal.org_id,
@@ -216,7 +218,7 @@ def get_assigned_orders(principal: CurrentPrincipal = Depends(get_current_princi
                 customer_address = customer_address if customer_address is not None else "No Address"
                 customer_phone = customer_phone if customer_phone is not None else ""
                 
-                orders.append({
+                order_data = {
                     'invoice_id': actual_invoice_id,
                     'invoice_no': invoice_data.get('invoice_no', actual_invoice_id) or "UNKNOWN_NO",
                     'customer_id': customer_id,
@@ -233,12 +235,15 @@ def get_assigned_orders(principal: CurrentPrincipal = Depends(get_current_princi
                     'status': 'delivered' if is_delivered else 'pending',
                     'delivered_at': delivered_at,
                     'rider_status': rider_status
-                })
+                }
+                
+                logger.info(f"📦 [RIDER ORDER] Invoice: {order_data['invoice_no']}, Customer: {customer_name}, Delivery: {delivery_address}, Shipping: {shipping_address}")
+                orders.append(order_data)
         except Exception as e:
             logger.error(f"Error processing assignment: {e}")
             continue
     
-    logger.info(f"Returning {len(orders)} orders to rider {principal.user_id}")
+    logger.info(f"📊 [RIDER API] Returning {len(orders)} orders to rider {principal.user_id}")
     return {'orders': orders, 'count': len(orders)}
 
 

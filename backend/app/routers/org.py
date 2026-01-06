@@ -9,7 +9,7 @@ import secrets
 import re
 from ..deps import get_current_principal, CurrentPrincipal
 from ..tenancy import resolve_tenant
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from ..utils.email import send_verification_email, send_welcome_email
 
 router = APIRouter()
@@ -27,8 +27,8 @@ def _slugify(name: str) -> str:
     s = re.sub(r"-+", "-", s)
     return s.strip("-")[:48] or "org"
 
-def track_maps_usage(db: Session, org_id: str, endpoint: str):
-    """Track Google Maps API usage for an organization"""
+def track_maps_usage(db: Session, org_id: str, endpoint: str, user_id: str = None):
+    """Track Google Maps API usage for an organization and user"""
     try:
         # Update organization total count
         org = db.query(models.Organization).filter(models.Organization.org_id == org_id).first()
@@ -41,6 +41,7 @@ def track_maps_usage(db: Session, org_id: str, endpoint: str):
         today = datetime.utcnow().date()
         usage = db.query(models.MapsApiUsage).filter(
             models.MapsApiUsage.org_id == org_id,
+            models.MapsApiUsage.user_id == user_id,
             models.MapsApiUsage.endpoint == endpoint,
             func.date(models.MapsApiUsage.created_at) == today
         ).first()
@@ -51,6 +52,7 @@ def track_maps_usage(db: Session, org_id: str, endpoint: str):
         else:
             usage = models.MapsApiUsage(
                 org_id=org_id,
+                user_id=user_id,
                 endpoint=endpoint,
                 request_count=1
             )
@@ -118,7 +120,7 @@ def register_org(payload: schemas.OrgRegisterIn, db: Session = Depends(get_db)):
     
     # Generate email verification token
     verification_token = secrets.token_urlsafe(32)
-    token_expires_at = datetime.utcnow() + timedelta(hours=24)
+    token_expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
     
     user = models.User(
         org_id=org.org_id,
@@ -135,10 +137,15 @@ def register_org(payload: schemas.OrgRegisterIn, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(org)
     
+    print(f"[Registration] User created with ID: {user.user_id}, email: {email_lower}")
+    print(f"[Registration] Verification token generated (expires: {token_expires_at})")
+    
     # Send verification email
     try:
-        verification_link = f"https://admin.digitalchain.in/verify-email?token={verification_token}"
+        # Use organization's subdomain for verification link
+        verification_link = f"https://{slug}.digitalchain.in/verify-email?token={verification_token}"
         print(f"[Registration] Attempting to send verification email to {email_lower}")
+        print(f"[Registration] Verification link: {verification_link}")
         result = send_verification_email(db, email_lower, verification_link, payload.org_name)
         print(f"[Registration] Email send result: {result}")
     except Exception as e:
@@ -260,19 +267,47 @@ def verify_email(token: str = Query(...), db: Session = Depends(get_db)):
     if not token:
         raise HTTPException(status_code=400, detail="Verification token is required")
     
+    print(f"[Verify Email] Received token: {token[:10]}...")
+    
     # Find user with this token
     user = db.query(models.User).filter(models.User.verification_token == token).first()
     
     if not user:
-        raise HTTPException(status_code=404, detail="Invalid verification token")
+        print(f"[Verify Email] No user found with token: {token[:10]}...")
+        
+        # Check if this is a customer token (fallback for old links without type=customer)
+        customer = db.query(models.Customer).filter(models.Customer.verification_token == token).first()
+        if customer:
+            print(f"[Verify Email] Found customer instead: {customer.email}. Redirecting to customer verification.")
+            # Redirect to customer verification endpoint
+            from fastapi.responses import RedirectResponse
+            return RedirectResponse(url=f"/v1/customer-portal/verify-email?token={token}", status_code=307)
+        
+        raise HTTPException(status_code=404, detail="Invalid verification token. The link may have expired or already been used.")
+    
+    print(f"[Verify Email] Found user: {user.email}, verified: {user.email_verified}, expires: {user.token_expires_at}")
     
     # Check if token has expired
-    if user.token_expires_at and user.token_expires_at < datetime.utcnow():
-        raise HTTPException(status_code=400, detail="Verification token has expired")
+    if user.token_expires_at:
+        # Make expiry time timezone-aware if it isn't already
+        expiry_time = user.token_expires_at
+        if expiry_time.tzinfo is None:
+            expiry_time = expiry_time.replace(tzinfo=timezone.utc)
+        if expiry_time < datetime.now(timezone.utc):
+            print(f"[Verify Email] Token expired. Expiry: {expiry_time}, Now: {datetime.now(timezone.utc)}")
+            raise HTTPException(status_code=400, detail="Verification token has expired. Please request a new verification email.")
+    
+    print(f"[Verify Email] Token is valid and not expired")
     
     # Check if already verified
     if user.email_verified:
-        return {"status": "success", "message": "Email already verified"}
+        print(f"[Verify Email] Email already verified for user: {user.email}")
+        org = db.query(models.Organization).filter(models.Organization.org_id == user.org_id).first()
+        return {
+            "status": "success", 
+            "message": "Email already verified",
+            "org_slug": org.slug if org else None
+        }
     
     # Get organization details for welcome email
     org = db.query(models.Organization).filter(models.Organization.org_id == user.org_id).first()
@@ -283,10 +318,13 @@ def verify_email(token: str = Query(...), db: Session = Depends(get_db)):
     user.token_expires_at = None
     db.commit()
     
+    print(f"[Verify Email] Successfully verified email for user: {user.email}")
+    
     # Send welcome email with setup instructions
     if org:
         try:
             send_welcome_email(db, user.email, org.name, org.slug, user.name or "")
+            print(f"[Verify Email] Welcome email sent to {user.email}")
         except Exception as e:
             print(f"[Verification] Failed to send welcome email: {str(e)}")
             # Don't fail verification if welcome email fails
@@ -298,19 +336,30 @@ def verify_email(token: str = Query(...), db: Session = Depends(get_db)):
     }
 
 
+@router.get("/resend-verification")
 @router.post("/resend-verification")
-def resend_verification_email(email: str, db: Session = Depends(get_db)):
+def resend_verification_email(email: str = Query(None), db: Session = Depends(get_db)):
     """Resend verification email for unverified users"""
+    if not email:
+        raise HTTPException(status_code=400, detail="Email parameter is required")
+    
     email_lower = email.lower().strip()
+    
+    print(f"[Resend Verification] Request for email: {email_lower}")
     
     # Find user by email
     user = db.query(models.User).filter(models.User.email == email_lower).first()
     
     if not user:
+        print(f"[Resend Verification] User not found: {email_lower}")
         raise HTTPException(status_code=404, detail="User not found")
+    
+    print(f"[Resend Verification] Found user: {user.user_id}, verified: {user.email_verified}")
+    print(f"[Resend Verification] Old token expires at: {user.token_expires_at}")
     
     # Check if already verified
     if user.email_verified:
+        print(f"[Resend Verification] Email already verified for: {email_lower}")
         return {"status": "success", "message": "Email already verified"}
     
     # Get organization details
@@ -321,19 +370,29 @@ def resend_verification_email(email: str, db: Session = Depends(get_db)):
     
     # Generate new verification token
     verification_token = secrets.token_urlsafe(32)
-    token_expires_at = datetime.utcnow() + timedelta(hours=24)
+    token_expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
+    
+    print(f"[Resend Verification] Generated new token (expires: {token_expires_at})")
     
     # Update user with new token
     user.verification_token = verification_token
     user.token_expires_at = token_expires_at
     db.commit()
     
+    print(f"[Resend Verification] Updated user token in database")
+    
     # Send verification email
     try:
-        verification_link = f"https://admin.digitalchain.in/verify-email?token={verification_token}"
+        # Use organization's subdomain for verification link
+        verification_link = f"https://{org.slug}.digitalchain.in/verify-email?token={verification_token}"
+        print(f"[Resend Verification] Sending email to {email_lower}")
+        print(f"[Resend Verification] Link: {verification_link}")
         send_verification_email(db, email_lower, verification_link, org.name)
+        print(f"[Resend Verification] Email sent successfully")
     except Exception as e:
         print(f"[Resend] Failed to send verification email: {str(e)}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail="Failed to send verification email")
     
     return {"status": "success", "message": "Verification email sent"}
@@ -430,9 +489,9 @@ def geocode_address(address: str = Query(..., description="Address to geocode"),
     import urllib.request
     import json
     
-    # Track usage
+    # Track usage with user_id
     if principal.org_id:
-        track_maps_usage(db, principal.org_id, "geocode")
+        track_maps_usage(db, principal.org_id, "geocode", principal.user_id)
     
     # Get global platform settings
     platform_row = db.query(models.PlatformSettings).order_by(models.PlatformSettings.id.asc()).first()
@@ -567,6 +626,17 @@ def get_maps_usage(
         models.MapsApiUsage.created_at >= thirty_days_ago
     ).group_by(models.MapsApiUsage.endpoint).all()
     
+    # Get usage breakdown by user role for last 30 days
+    usage_by_role = db.query(
+        models.User.role,
+        func.sum(models.MapsApiUsage.request_count).label('total_requests')
+    ).join(
+        models.User, models.MapsApiUsage.user_id == models.User.user_id, isouter=True
+    ).filter(
+        models.MapsApiUsage.org_id == principal.org_id,
+        models.MapsApiUsage.created_at >= thirty_days_ago
+    ).group_by(models.User.role).all()
+    
     # Get daily usage for last 7 days
     seven_days_ago = datetime.utcnow() - timedelta(days=7)
     daily_usage = db.query(
@@ -582,6 +652,10 @@ def get_maps_usage(
         "usage_by_endpoint": [
             {"endpoint": endpoint, "requests": int(count)}
             for endpoint, count in usage_by_endpoint
+        ],
+        "usage_by_role": [
+            {"role": role or "Unknown", "requests": int(count)}
+            for role, count in usage_by_role
         ],
         "daily_usage_last_7_days": [
             {"date": str(date), "requests": int(count)}

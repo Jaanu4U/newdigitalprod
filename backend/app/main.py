@@ -2,7 +2,7 @@ from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 import os
 from fastapi.middleware.cors import CORSMiddleware
-from .routers import auth, org, rider, health, seed, superadmin, org_users, account, platform, providers, customers, invoice, invoice_pdf, whatsapp, rider_delivery, audit, payment
+from .routers import auth, org, rider, health, seed, superadmin, org_users, account, platform, providers, customers, invoice, invoice_pdf, whatsapp, rider_delivery, audit, payment, customer_portal, tracking
 from .db import Base, engine
 from .tenancy import TenantMiddleware
 from .websocket import manager
@@ -50,6 +50,12 @@ app.include_router(providers.router, prefix="/v1", tags=["providers"])
 
 # Register customers router for customer management
 app.include_router(customers.router, prefix="/v1", tags=["customers"])
+
+# Register customer portal router for customer self-service
+app.include_router(customer_portal.router, prefix="/v1/customer-portal", tags=["customer-portal"])
+
+# Register tracking router for real-time rider location tracking
+app.include_router(tracking.router, prefix="/v1", tags=["tracking"])
 
 # Register invoice router for invoice management (sharing, email, bulk upload, sync)
 app.include_router(invoice.router, prefix="/v1", tags=["invoice"])

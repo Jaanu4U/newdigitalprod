@@ -20,7 +20,7 @@ from ..tenancy import resolve_tenant
 from ..core import settings
 
 
-async def geocode_address(address: str, google_api_key: str = None, org_id: str = None, db: Session = None) -> tuple[float, float] | None:
+async def geocode_address(address: str, google_api_key: str = None, org_id: str = None, db: Session = None, user_id: str = None) -> tuple[float, float] | None:
     """Geocode an address using Google Maps API and track usage"""
     if not address or not google_api_key:
         return None
@@ -29,7 +29,7 @@ async def geocode_address(address: str, google_api_key: str = None, org_id: str 
         # Track usage if org_id and db provided
         if org_id and db:
             from .org import track_maps_usage
-            track_maps_usage(db, org_id, "bulk_geocode")
+            track_maps_usage(db, org_id, "bulk_geocode", user_id)
         
         async with httpx.AsyncClient() as client:
             response = await client.get(
@@ -443,6 +443,7 @@ async def bulk_upload_invoices(
             with open('/tmp/upload_debug.log', 'a') as f:
                 f.write(f"Failed to parse address_parts: {e}\n")
     
+    # Determine which mapping to use
     if column_mapping:
         try:
             custom_mapping = json.loads(column_mapping)
@@ -456,11 +457,31 @@ async def bulk_upload_invoices(
             with open('/tmp/upload_debug.log', 'a') as f:
                 f.write(f"Applied custom column mapping: {normalized_mapping}\n")
                 f.write(f"Resulting columns after mapping: {list(df.columns)}\n")
+            
+            # After custom mapping, rename customer_id to custom_customer_id for database field
+            # This is needed because UI uses 'customer_id' but DB field is 'custom_customer_id'
+            if 'customer_id' in df.columns:
+                df = df.rename(columns={'customer_id': 'custom_customer_id'})
+                with open('/tmp/upload_debug.log', 'a') as f:
+                    f.write(f"Renamed 'customer_id' -> 'custom_customer_id' for database field\n")
+                    f.write(f"Final columns: {list(df.columns)}\n")
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Invalid column mapping: {str(e)}")
+        
+        # When custom mapping is provided, don't apply automatic fallback mapping
+        # This ensures only explicitly mapped columns are used
+        column_mapping_dict = {}
     else:
         # Use automatic column mapping
         column_mapping_dict = {
+        # Customer ID variations (maps to custom_customer_id field)
+        'customer_id': 'custom_customer_id',
+        'customerid': 'custom_customer_id',
+        'cust_id': 'custom_customer_id',
+        'custid': 'custom_customer_id',
+        'customer_code': 'custom_customer_id',
+        'code': 'custom_customer_id',
+        
         # Customer name variations
         'customer_name': 'customer_name',
         'customername': 'customer_name',
@@ -587,14 +608,22 @@ async def bulk_upload_invoices(
         'gstin_number': 'customer_gstin',
         'tax_id': 'customer_gstin',
         'tin': 'customer_gstin',
+        
+        # Rider/Driver name variations
+        'rider': 'rider_name',
+        'rider_name': 'rider_name',
+        'driver': 'rider_name',
+        'driver_name': 'rider_name',
+        'delivery_boy': 'rider_name',
+        'delivery_person': 'rider_name',
         }
         
         # Rename columns based on mapping (case-insensitive)
         df.columns = df.columns.str.lower().str.strip().str.replace(' ', '_')
         df = df.rename(columns={k.lower(): v for k, v in column_mapping_dict.items()})
     
-    # Validate required columns
-    required_cols = ['customer_name', 'customer_phone', 'item_name', 'item_quantity', 'item_price']
+    # Validate required columns - only customer_name and customer_phone are truly required
+    required_cols = ['customer_name', 'customer_phone']
     missing_cols = [col for col in required_cols if col not in df.columns]
     if missing_cols:
         # Show available columns to help user
@@ -603,6 +632,18 @@ async def bulk_upload_invoices(
             status_code=400,
             detail=f"Missing required columns: {', '.join(missing_cols)}. Available columns: {available_cols}"
         )
+    
+    # Add default columns if item fields are missing
+    if 'item_name' not in df.columns:
+        df['item_name'] = 'All Items'
+    if 'item_quantity' not in df.columns:
+        df['item_quantity'] = 1
+    if 'item_price' not in df.columns:
+        # Try to use total_amount if available, otherwise default to 0
+        if 'total_amount' in df.columns:
+            df['item_price'] = df['total_amount']
+        else:
+            df['item_price'] = 0
     
     # Process each row - first validate and group by customer
     created_count = 0
@@ -670,38 +711,45 @@ async def bulk_upload_invoices(
                 errors.append({"row": row_num, "message": "Customer name is required"})
                 continue
             
+            # Item name is now optional - use default if missing
             item_val = row['item_name']
             if isinstance(item_val, pd.Series):
                 item_val = item_val.iloc[0] if len(item_val) > 0 else None
-            if pd.isna(item_val):
-                errors.append({"row": row_num, "message": "Item name is required"})
-                continue
-            if not str(item_val).strip():
-                errors.append({"row": row_num, "message": "Item name is required"})
-                continue
+            # Don't error if item name is missing - it will use the default value
+            
         except Exception as e:
             errors.append({"row": row_num, "message": f"Error processing row: {str(e)}"})
             continue
         
-        # Validate numeric fields
+        # Validate numeric fields - now optional with defaults
         try:
-            quantity = float(row['item_quantity'])
-            # Allow negative quantities for returns, but not zero
-            if quantity == 0:
-                errors.append({"row": row_num, "message": "Item quantity cannot be zero"})
-                continue
+            quantity_val = row['item_quantity']
+            if isinstance(quantity_val, pd.Series):
+                quantity_val = quantity_val.iloc[0] if len(quantity_val) > 0 else None
+            if pd.isna(quantity_val):
+                quantity = 1  # Default quantity
+            else:
+                quantity = float(quantity_val)
+                # Allow negative quantities for returns, but not zero
+                if quantity == 0:
+                    errors.append({"row": row_num, "message": "Item quantity cannot be zero"})
+                    continue
         except (ValueError, TypeError):
-            errors.append({"row": row_num, "message": "Invalid item quantity"})
-            continue
+            quantity = 1  # Default to 1 if invalid
         
         try:
-            price = float(row['item_price'])
-            if price < 0:
-                errors.append({"row": row_num, "message": "Item price cannot be negative"})
-                continue
+            price_val = row['item_price']
+            if isinstance(price_val, pd.Series):
+                price_val = price_val.iloc[0] if len(price_val) > 0 else None
+            if pd.isna(price_val):
+                price = 0  # Default price
+            else:
+                price = float(price_val)
+                if price < 0:
+                    errors.append({"row": row_num, "message": "Item price cannot be negative"})
+                    continue
         except (ValueError, TypeError):
-            errors.append({"row": row_num, "message": "Invalid item price"})
-            continue
+            price = 0  # Default to 0 if invalid
         
         # Normalize phone number
         phone = str(row['customer_phone']).strip()
@@ -754,7 +802,7 @@ async def bulk_upload_invoices(
             with open('/tmp/upload_debug.log', 'a') as f:
                 f.write(f"Final combined address (Bill To & Ship To): {combined_address}\n\n")
             
-            # Use shipping address column if provided, otherwise use same address
+            # Use shipping address column if provided, otherwise leave as None
             shipping_addr = None
             if 'shipping_address' in df.columns:
                 ship_addr = row['shipping_address']
@@ -762,8 +810,7 @@ async def bulk_upload_invoices(
                     ship_addr = ship_addr.iloc[0] if len(ship_addr) > 0 else None
                 if not pd.isna(ship_addr) and str(ship_addr).strip():
                     shipping_addr = str(ship_addr).strip()
-            if not shipping_addr:
-                shipping_addr = combined_address
+            # Don't default to billing address - leave as None if not provided
             
             # Extract optional fields safely
             email_val = None
@@ -785,6 +832,16 @@ async def bulk_upload_invoices(
                     tracking_val = str(tracking_val).strip()
                 else:
                     tracking_val = None
+            
+            rider_name_val = None
+            if 'rider_name' in df.columns:
+                rider_name_val = row['rider_name']
+                if isinstance(rider_name_val, pd.Series):
+                    rider_name_val = rider_name_val.iloc[0] if len(rider_name_val) > 0 else None
+                if not pd.isna(rider_name_val) and str(rider_name_val).strip():
+                    rider_name_val = str(rider_name_val).strip()
+                else:
+                    rider_name_val = None
             
             invoice_num_val = None
             if 'invoice_number' in df.columns:
@@ -821,13 +878,29 @@ async def bulk_upload_invoices(
                 else:
                     gstin_val = None
             
+            # Extract custom_customer_id if provided
+            custom_customer_id_val = None
+            if 'custom_customer_id' in df.columns:
+                custom_customer_id_val = row['custom_customer_id']
+                if isinstance(custom_customer_id_val, pd.Series):
+                    custom_customer_id_val = custom_customer_id_val.iloc[0] if len(custom_customer_id_val) > 0 else None
+                if not pd.isna(custom_customer_id_val) and str(custom_customer_id_val).strip():
+                    custom_customer_id_val = str(custom_customer_id_val).strip()
+                    print(f"📋 Extracted custom_customer_id from CSV row {row_num}: '{custom_customer_id_val}'")
+                else:
+                    custom_customer_id_val = None
+            else:
+                print(f"⚠️ Column 'custom_customer_id' not found in dataframe. Available columns: {list(df.columns)}")
+            
             customer_invoices[phone]["customer_data"] = {
                 "name": str(name_val).strip(),
                 "email": email_val,
                 "gstin": gstin_val,
+                "custom_customer_id": custom_customer_id_val,
                 "address": combined_address,
                 "shipping_address": shipping_addr,
                 "tracking_number": tracking_val,
+                "rider_name": rider_name_val,
                 "invoice_number": invoice_num_val,
                 "invoice_date": invoice_date_val,
             }
@@ -884,9 +957,56 @@ async def bulk_upload_invoices(
                 # If GSTIN is provided, it's B2B; otherwise B2C
                 customer_type = 'B2B' if customer_data.get("gstin") else 'B2C'
                 
+                # customer_id (primary key) is auto-generated UUID
+                # custom_customer_id is the user-provided ID from CSV or auto-generated
+                custom_id = customer_data.get("custom_customer_id")
+                if custom_id:
+                    print(f"✅ Using provided customer_id from CSV: '{custom_id}' for customer {customer_data['name']}")
+                    
+                    # Check if custom_customer_id already exists in database
+                    existing_customer = db.query(models.Customer).filter(
+                        models.Customer.org_id == principal.org_id,
+                        models.Customer.custom_customer_id == custom_id
+                    ).first()
+                    
+                    if existing_customer:
+                        error_msg = f"Customer ID '{custom_id}' already exists for customer '{existing_customer.name or existing_customer.company_name}' (Phone: {existing_customer.phone})"
+                        print(f"❌ DUPLICATE customer_id: {error_msg}")
+                        
+                        # Skip this invoice and add to errors
+                        failed_invoices.append({
+                            "invoice_number": invoice_number,
+                            "customer_name": customer_data.get("name", "Unknown"),
+                            "phone": phone,
+                            "error": error_msg,
+                            "rows": [item["row_num"] for item in items]
+                        })
+                        for item in items:
+                            errors.append({
+                                "row": item["row_num"],
+                                "message": error_msg,
+                                "field": "customer_id"
+                            })
+                        continue  # Skip to next customer
+                else:
+                    # Auto-generate random 6-character alphanumeric customer ID
+                    import random
+                    import string
+                    while True:
+                        custom_id = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
+                        # Check if generated ID already exists
+                        existing = db.query(models.Customer).filter(
+                            models.Customer.org_id == principal.org_id,
+                            models.Customer.custom_customer_id == custom_id
+                        ).first()
+                        if not existing:
+                            break  # Found a unique ID
+                    print(f"🎲 Auto-generated customer_id: '{custom_id}' for customer {customer_data['name']}")
+                
                 # Create new customer
                 customer = models.Customer(
-                    customer_id=str(uuid.uuid4()),
+                    customer_id=str(uuid.uuid4()),  # Primary key (auto-generated)
+                    custom_customer_id=custom_id,
                     org_id=principal.org_id,
                     ctype=customer_type,
                     name=customer_data["name"],
@@ -903,16 +1023,52 @@ async def bulk_upload_invoices(
                     # Use shipping address if available, otherwise use billing address
                     address_to_geocode = customer_data.get("shipping_address") or customer_data["address"]
                     if address_to_geocode:
-                        coords = await geocode_address(address_to_geocode, google_api_key, principal.org_id, db)
+                        coords = await geocode_address(address_to_geocode, google_api_key, principal.org_id, db, principal.user_id)
                         if coords:
                             customer.latitude = str(coords[0])
                             customer.longitude = str(coords[1])
                 
                 db.add(customer)
+                print(f"💾 Saved NEW customer to DB: {customer.name}, phone={customer.phone}, custom_customer_id='{customer.custom_customer_id}'")
                 new_customers_count += 1
                 customer_created = True
             else:
                 # Update existing customer with latest data from CSV
+                print(f"🔄 Updating EXISTING customer: {customer.name}, phone={customer.phone}")
+                if customer_data.get("custom_customer_id"):
+                    # Check if the new custom_customer_id already exists for a different customer
+                    new_custom_id = customer_data["custom_customer_id"]
+                    if new_custom_id != customer.custom_customer_id:
+                        existing_with_id = db.query(models.Customer).filter(
+                            models.Customer.org_id == principal.org_id,
+                            models.Customer.custom_customer_id == new_custom_id,
+                            models.Customer.customer_id != customer.customer_id  # Different customer
+                        ).first()
+                        
+                        if existing_with_id:
+                            error_msg = f"Cannot update: Customer ID '{new_custom_id}' already exists for another customer '{existing_with_id.name or existing_with_id.company_name}' (Phone: {existing_with_id.phone})"
+                            print(f"❌ DUPLICATE customer_id on update: {error_msg}")
+                            
+                            # Skip this invoice and add to errors
+                            failed_invoices.append({
+                                "invoice_number": invoice_number,
+                                "customer_name": customer_data.get("name", "Unknown"),
+                                "phone": phone,
+                                "error": error_msg,
+                                "rows": [item["row_num"] for item in items]
+                            })
+                            for item in items:
+                                errors.append({
+                                    "row": item["row_num"],
+                                    "message": error_msg,
+                                    "field": "customer_id"
+                                })
+                            continue  # Skip to next customer
+                    
+                    # Update custom_customer_id if no duplicate
+                    old_id = customer.custom_customer_id
+                    customer.custom_customer_id = new_custom_id
+                    print(f"  📝 Updated custom_customer_id: '{old_id}' -> '{customer.custom_customer_id}'")
                 if customer_data.get("email"):
                     customer.email = customer_data["email"]
                 if customer_data.get("gstin"):
@@ -930,7 +1086,7 @@ async def bulk_upload_invoices(
                     if google_api_key:
                         address_to_geocode = customer_data.get("shipping_address") or customer_data["address"]
                         if address_to_geocode:
-                            coords = await geocode_address(address_to_geocode, google_api_key, principal.org_id, db)
+                            coords = await geocode_address(address_to_geocode, google_api_key, principal.org_id, db, principal.user_id)
                             if coords:
                                 customer.latitude = str(coords[0])
                                 customer.longitude = str(coords[1])
@@ -1020,24 +1176,85 @@ async def bulk_upload_invoices(
                 "new_customer": customer_created
             })
             
-            # Create shipment if tracking number provided
-            if customer_data["tracking_number"]:
-                shipment = models.Shipment(
-                    shipment_id=str(uuid.uuid4()),
-                    org_id=principal.org_id,
-                    invoice_id=invoice_payload['invoice_id'],
-                    provider_code="manual",
-                    provider_name="Manual Entry",
-                    tracking_number=customer_data["tracking_number"],
-                    status="pending",
-                    shipping_address=customer_data["shipping_address"],
-                    created_at=datetime.now(timezone.utc)
-                )
-                db.add(shipment)
+            # Note: Tracking number is stored in invoice payload, no separate shipment model
             
-            # Add to new customers count if customer was created
-            if customer_created:
-                new_customers_count += 1
+            # Auto-assign rider if rider_name is provided
+            rider_assigned = False
+            rider_warning = None
+            if customer_data.get("rider_name"):
+                rider_name = customer_data["rider_name"].strip()
+                print(f"🔍 Looking for rider: '{rider_name}' in org: {principal.org_id}")
+                
+                # Find rider by name (case-insensitive)
+                rider = db.query(models.User).filter(
+                    models.User.org_id == principal.org_id,
+                    models.User.role == 'Rider',
+                    models.User.name.ilike(f"%{rider_name}%")
+                ).first()
+                
+                if rider:
+                    print(f"✅ Found rider: {rider.name} (ID: {rider.user_id})")
+                    # Create delivery assignment
+                    delivery = models.Delivery(
+                        delivery_id=str(uuid.uuid4()),
+                        org_id=principal.org_id,
+                        order_id=invoice_payload['invoice_id'],
+                        customer=customer.name,
+                        customer_phone=customer.phone,
+                        address=customer_data.get("shipping_address") or customer_data["address"],
+                        status='assigned',
+                        assigned_rider_id=rider.user_id,
+                        tracking_number=customer_data.get("tracking_number"),
+                        created_at=datetime.now(timezone.utc),
+                        assigned_at=datetime.now(timezone.utc)
+                    )
+                    db.add(delivery)
+                    
+                    # Create SyncLog entry for rider assignment (so it appears in UI)
+                    rider_assignment_log = models.SyncLog(
+                        org_id=principal.org_id,
+                        user_id=principal.user_id,
+                        type='invoice_rider_assigned',
+                        payload=json.dumps({
+                            'invoice_id': invoice_payload['invoice_id'],
+                            'invoice_no': invoice_no,
+                            'rider_name': rider.name,
+                            'rider_email': rider.email,
+                            'rider_id': rider.user_id,
+                            'assigned_by': principal.user_id,
+                            'auto_assigned': True
+                        }),
+                        created_at=datetime.now(timezone.utc)
+                    )
+                    db.add(rider_assignment_log)
+                    
+                    rider_assigned = True
+                    print(f"✅ Auto-assigned rider '{rider.name}' to invoice {invoice_no}")
+                else:
+                    # Check what riders exist
+                    all_riders = db.query(models.User).filter(
+                        models.User.org_id == principal.org_id,
+                        models.User.role == 'Rider'
+                    ).all()
+                    available_riders = [r.name for r in all_riders]
+                    print(f"⚠️ Rider '{rider_name}' not found. Available riders: {available_riders}")
+                    
+                    # Rider not found - add warning
+                    rider_warning = f"Rider '{rider_name}' not found. Available riders: {', '.join(available_riders) if available_riders else 'None'}"
+                    warnings.append({
+                        "row": items[0]["row_num"] if items else None,
+                        "message": rider_warning,
+                        "field": "rider_name",
+                        "invoice_number": invoice_number
+                    })
+            else:
+                print(f"ℹ️ No rider_name provided for invoice {invoice_no}")
+            
+            # Update processed invoice info with rider details
+            processed_invoices[-1]["rider_assigned"] = rider_assigned
+            processed_invoices[-1]["rider_name"] = customer_data.get("rider_name")
+            if rider_warning:
+                processed_invoices[-1]["rider_warning"] = rider_warning
             
         except Exception as e:
             # Track failed invoice

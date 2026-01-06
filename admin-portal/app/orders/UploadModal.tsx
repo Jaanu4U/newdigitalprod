@@ -10,22 +10,28 @@ interface UploadModalProps {
 interface StandardColumn {
   required: boolean;
   description: string;
+  label: string;
   isMultiSelect?: boolean;
 }
 
 const standardColumns: Record<string, StandardColumn> = {
-  invoice_number: { required: false, description: 'Invoice number (invoice_no, bill_no, inv_no, voucher_no, receipt_no, doc_no, feedno, feed_no) - groups invoices by this number' },
-  invoice_date: { required: false, description: 'Invoice date (invoice_date, date, bill_date, doc_date)' },
-  customer_name: { required: true, description: 'Customer name (customer_name, name, party_name, customer)' },
-  customer_phone: { required: true, description: 'Phone number (phone, mobile, contact, customer_phone) - groups products by customer' },
-  customer_email: { required: false, description: 'Email address (email, customer_email)' },
-  customer_gstin: { required: false, description: 'GSTIN/GST Number (gstin, gst, gst_number, tax_id) - if provided, marks as B2B customer' },
-  customer_address: { required: false, description: 'Customer billing address (Includes: Name + Street + City + PIN) - Select up to 3 columns to combine', isMultiSelect: true },
-  shipping_address: { required: false, description: 'Shipping address (shipping_address, delivery_address)' },
-  item_name: { required: true, description: 'Product/item name (product, item_name, description, particulars)' },
-  item_quantity: { required: true, description: 'Quantity (quantity, qty, item_quantity)' },
-  item_price: { required: true, description: 'Unit price (price, rate, amount, item_price)' },
-  tracking_number: { required: false, description: 'Tracking/AWB number (tracking, awb, docket, tracking_number)' },
+  invoice_number: { required: false, label: 'Invoice Number', description: 'Invoice number (invoice_no, bill_no, inv_no, voucher_no, receipt_no, doc_no, feedno, feed_no) - groups invoices by this number' },
+  invoice_date: { required: false, label: 'Invoice Date', description: 'Invoice date (invoice_date, date, bill_date, doc_date)' },
+  customer_id: { required: false, label: 'Customer ID', description: 'Customer ID or code (customer_id, cust_id, customer_code, party_code) - unique identifier for customer' },
+  customer_name: { required: true, label: 'Customer Name', description: 'Customer name (customer_name, name, party_name, customer)' },
+  customer_phone: { required: true, label: 'Customer Phone', description: 'Phone number (phone, mobile, contact, customer_phone) - groups products by customer' },
+  customer_email: { required: false, label: 'Customer Email', description: 'Email address (email, customer_email)' },
+  customer_gstin: { required: false, label: 'Customer GSTIN', description: 'GSTIN/GST Number (gstin, gst, gst_number, tax_id) - if provided, marks as B2B customer' },
+  customer_address: { required: false, label: 'Customer Address', description: 'Customer billing address (Includes: Name + Street + City + PIN) - Select up to 3 columns to combine', isMultiSelect: true },
+  shipping_address: { required: false, label: 'Shipping Address', description: 'Shipping address (shipping_address, delivery_address)' },
+  rider_name: { required: false, label: 'Rider/Driver Name', description: 'Rider or driver name (rider, driver, driver_name, delivery_boy) - auto-assigns rider if name matches' },
+  item_name: { required: false, label: 'Product/Item Name', description: 'Product/item name (product, item_name, description, particulars) - if not mapped, will use "All Items"' },
+  item_quantity: { required: false, label: 'Quantity', description: 'Quantity (quantity, qty, item_quantity) - if not mapped, will use "All Quantity"' },
+  item_price: { required: false, label: 'Unit Price', description: 'Unit price or total amount (price, rate, amount, item_price, total) - if not mapped, will use Total Amount' },
+  total_amount: { required: false, label: 'Total Amount', description: 'Total amount (total, total_amount, net_amount, grand_total)' },
+  discount_amount: { required: false, label: 'Discount Amount', description: 'Discount amount (discount, discount_amount, discount_value)' },
+  discount_percentage: { required: false, label: 'Discount Percentage', description: 'Discount percentage (discount_percent, discount_percentage, disc_percent)' },
+  tracking_number: { required: false, label: 'Tracking Number', description: 'Tracking/AWB number (tracking, awb, docket, tracking_number)' },
 };
 
 export default function UploadModal({ base, onClose, onSuccess }: UploadModalProps) {
@@ -228,6 +234,99 @@ export default function UploadModal({ base, onClose, onSuccess }: UploadModalPro
     }
   };
 
+  const downloadExampleFile = () => {
+    // Create example data with all supported columns
+    const exampleData = [
+      {
+        'Invoice Number': 'INV001',
+        'Invoice Date': '2026-01-06',
+        'Customer ID': 'CUST001',
+        'Customer Name': 'John Doe',
+        'Customer Phone': '9876543210',
+        'Customer Email': 'john@example.com',
+        'Customer GSTIN': '29ABCDE1234F1Z5',
+        'Customer Address - Street': '123 Main Street, Building A',
+        'Customer Address - City': 'Mumbai, Maharashtra',
+        'Customer Address - PIN': '400001',
+        'Shipping Address': 'Same as billing',
+        'Rider/Driver Name': 'Ramesh Kumar',
+        'Product/Item Name': 'Widget A',
+        'Quantity': '5',
+        'Unit Price': '100.00',
+        'Total Amount': '500.00',
+        'Discount Amount': '50.00',
+        'Discount Percentage': '10',
+        'Tracking Number': 'TRK123456789'
+      },
+      {
+        'Invoice Number': 'INV001',
+        'Invoice Date': '2026-01-06',
+        'Customer ID': 'CUST001',
+        'Customer Name': 'John Doe',
+        'Customer Phone': '9876543210',
+        'Customer Email': 'john@example.com',
+        'Customer GSTIN': '29ABCDE1234F1Z5',
+        'Customer Address - Street': '123 Main Street, Building A',
+        'Customer Address - City': 'Mumbai, Maharashtra',
+        'Customer Address - PIN': '400001',
+        'Shipping Address': 'Same as billing',
+        'Rider/Driver Name': 'Ramesh Kumar',
+        'Product/Item Name': 'Widget B',
+        'Quantity': '3',
+        'Unit Price': '200.00',
+        'Total Amount': '600.00',
+        'Discount Amount': '60.00',
+        'Discount Percentage': '10',
+        'Tracking Number': 'TRK123456789'
+      },
+      {
+        'Invoice Number': 'INV002',
+        'Invoice Date': '2026-01-06',
+        'Customer ID': 'CUST002',
+        'Customer Name': 'Jane Smith',
+        'Customer Phone': '9123456789',
+        'Customer Email': 'jane@example.com',
+        'Customer GSTIN': '',
+        'Customer Address - Street': '456 Park Avenue',
+        'Customer Address - City': 'Delhi',
+        'Customer Address - PIN': '110001',
+        'Shipping Address': '',
+        'Rider/Driver Name': 'Suresh Singh',
+        'Product/Item Name': 'Product X',
+        'Quantity': '10',
+        'Unit Price': '50.00',
+        'Total Amount': '500.00',
+        'Discount Amount': '',
+        'Discount Percentage': '',
+        'Tracking Number': ''
+      }
+    ];
+
+    // Convert to CSV
+    const headers = Object.keys(exampleData[0]);
+    const csvContent = [
+      headers.join(','),
+      ...exampleData.map(row => 
+        headers.map(header => {
+          const value = row[header as keyof typeof row] || '';
+          // Wrap in quotes if contains comma
+          return value.toString().includes(',') ? `"${value}"` : value;
+        }).join(',')
+      )
+    ].join('\n');
+
+    // Create and download file
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', 'invoice_upload_example.csv');
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
       <div className="bg-white rounded-2xl shadow-lg border border-gray-100 max-w-4xl w-full mx-4 max-h-[90vh] overflow-y-auto">
@@ -250,6 +349,30 @@ export default function UploadModal({ base, onClose, onSuccess }: UploadModalPro
                 <p className="text-sm text-gray-600 mb-2">
                   Upload a CSV or Excel file. Multiple products for the same customer (phone number) will be grouped into one invoice.
                 </p>
+                
+                {/* Example File Download Section */}
+                <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                  <div className="flex items-start gap-2">
+                    <div className="flex-shrink-0 mt-0.5">
+                      <svg className="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                    </div>
+                    <div className="flex-1">
+                      <h4 className="text-sm font-medium text-blue-900 mb-1">First time uploading?</h4>
+                      <p className="text-xs text-blue-700 mb-2">
+                        Download our example file to see the expected format with sample data
+                      </p>
+                      <button
+                        onClick={downloadExampleFile}
+                        className="inline-flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-md hover:bg-blue-700 transition-colors"
+                      >
+                        <Download size={14} />
+                        Download Example File
+                      </button>
+                    </div>
+                  </div>
+                </div>
               </div>
 
               <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center">
@@ -337,7 +460,7 @@ export default function UploadModal({ base, onClose, onSuccess }: UploadModalPro
                       <div key={standardCol} className="grid grid-cols-2 gap-4 items-start p-2 bg-blue-50 rounded">
                         <div className="text-sm flex items-center gap-2">
                           <div>
-                            <span className="font-medium">{standardCol}</span>
+                            <span className="font-medium">{info.label}</span>
                             <div className="text-xs text-gray-500">{info.description}</div>
                           </div>
                         </div>
@@ -386,7 +509,7 @@ export default function UploadModal({ base, onClose, onSuccess }: UploadModalPro
                       <div className="text-sm flex items-center gap-2">
                         {showWarning && <AlertTriangle size={16} className="text-yellow-600" />}
                         <div>
-                          <span className="font-medium">{standardCol}</span>
+                          <span className="font-medium">{info.label}</span>
                           {info.required && <span className="text-red-500 ml-1">*</span>}
                           <div className="text-xs text-gray-500">{info.description}</div>
                         </div>

@@ -92,6 +92,7 @@ export default function SignupPage() {
         throw new Error(j.detail || 'Signup failed')
       }
       const out = await res.json()
+      console.log('[Signup] Registration successful:', out)
       setSuccess(true)
     } catch (err:any) {
       setError(err.message || 'Failed to create organization')

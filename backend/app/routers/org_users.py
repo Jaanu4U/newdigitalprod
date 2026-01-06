@@ -126,6 +126,7 @@ def create_org_user(
         password_hash=hash_password(temp_password),
         created_by=principal.user_id,
         status="active",
+        email_verified=True,  # Users created by admins are pre-verified
     )
     db.add(user)
     db.commit()

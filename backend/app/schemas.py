@@ -30,6 +30,11 @@ class LoginIn(BaseModel):
     device_id: Optional[str] = None
     app_version: Optional[str] = None
 
+class CustomerLoginIn(BaseModel):
+    email_or_phone: str  # Can be email or phone number
+    password: str
+    org_id: Optional[str] = None
+
 class SuperAdminLoginIn(BaseModel):
     email: EmailStr
     password: str
@@ -258,6 +263,42 @@ class CustomerUpdate(BaseModel):
     state: Optional[str] = None
     pin: Optional[str] = None
     notes: Optional[str] = None
+
+
+# Customer Portal schemas
+class CustomerRegisterIn(BaseModel):
+    org_id: Optional[str] = None  # Optional, will be resolved from tenant context
+    name: str
+    email: str
+    phone: str
+    password: str
+    address: Optional[str] = None
+    company_name: Optional[str] = None
+    ctype: Optional[str] = 'B2C'
+
+class CustomerProfileUpdateIn(BaseModel):
+    name: Optional[str] = None
+    phone: Optional[str] = None
+    address: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    pin: Optional[str] = None
+
+class ChangePasswordIn(BaseModel):
+    old_password: str
+    new_password: str
+
+
+# Customer purchase order schemas
+class OrderItemIn(BaseModel):
+    description: str
+    quantity: int
+    rate: float
+
+class CreateOrderIn(BaseModel):
+    items: List[OrderItemIn]
+    notes: Optional[str] = None
+    delivery_address: Optional[str] = None
 
 
 # Invoice sync schemas

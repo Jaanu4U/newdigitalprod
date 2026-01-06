@@ -10,6 +10,7 @@ import CustomerUploadModal from "./CustomerUploadModal";
 
 type Customer = {
   customer_id: string;
+  custom_customer_id?: string | null;
   ctype: "b2b" | "b2c";
   name?: string | null;
   company_name?: string | null;
@@ -52,6 +53,7 @@ export default function CustomersPage() {
   const [editSubmitError, setEditSubmitError] = useState<string | null>(null);
   // editable fields (mirrors schema) for edit
   const [eCtype, setECtype] = useState<"b2b"|"b2c">("b2c");
+  const [eCustomerId, setECustomerId] = useState("");
   const [eName, setEName] = useState("");
   const [eCompany, setECompany] = useState("");
   const [eGstin, setEGstin] = useState("");
@@ -529,6 +531,7 @@ export default function CustomersPage() {
   // Open edit modal
   const openEditCustomer = (c: Customer) => {
     setEditCustomer(c);
+    setECustomerId(c.custom_customer_id || "");
     setECtype(c.ctype);
     setEName(c.name || "");
     setECompany(c.company_name || "");
@@ -566,6 +569,7 @@ export default function CustomersPage() {
       const token = localStorage.getItem("dc_access") || "";
       const payload: any = {
         ctype: eCtype,
+        custom_customer_id: eCustomerId || undefined,
         name: eCtype === "b2b" ? (eName || undefined) : (eName || undefined),
         company_name: eCtype === "b2b" ? (eCompany || undefined) : undefined,
         gstin: eGstin ? eGstin.toUpperCase() : undefined,
@@ -586,6 +590,7 @@ export default function CustomersPage() {
         const d = await res.json().catch(()=>({}));
         const detail = d.detail || `HTTP ${res.status}`;
         if (/gstin/i.test(detail)) { setEditErrors(prev => ({...prev, gstin: detail})); return; }
+        if (/customer id.*already exists/i.test(detail)) { setEditErrors(prev => ({...prev, custom_customer_id: detail})); return; }
         setEditSubmitError(detail); return;
       }
       setEditOpen(false);
@@ -1052,6 +1057,16 @@ export default function CustomersPage() {
                     <option value="b2c">B2C</option>
                     <option value="b2b">B2B</option>
                   </select>
+                </div>
+                <div className="md:col-span-2">
+                  <label className="block text-xs text-gray-600 mb-1">Customer ID <span className="text-gray-400">(optional, must be unique)</span></label>
+                  <input 
+                    value={eCustomerId} 
+                    onChange={(e)=> { setECustomerId(e.target.value); setEditErrors(prev=>({...prev, custom_customer_id:""})); }} 
+                    className={`w-full px-2 py-2 border rounded-md font-mono ${editErrors.custom_customer_id?"border-red-400":"border-gray-300"}`}
+                    placeholder="Enter unique customer ID or leave blank"
+                  />
+                  {editErrors.custom_customer_id && <p className="mt-1 text-xs text-red-600">{editErrors.custom_customer_id}</p>}
                 </div>
                 {eCtype === "b2b" ? (
                   <>

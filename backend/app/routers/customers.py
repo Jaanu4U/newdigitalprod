@@ -272,13 +272,36 @@ async def bulk_upload_customers(
     successful = 0
     failed = 0
     errors = []
+    customers_to_add = []
+    
+    # Debug logging
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    # Collect all existing phones and custom_ids to check for duplicates
+    existing_phones = set()
+    existing_custom_ids = set()
+    all_customers = db.query(models.Customer).filter(
+        models.Customer.org_id == principal.org_id
+    ).all()
+    for c in all_customers:
+        if c.phone:
+            existing_phones.add(c.phone)
+        if c.custom_customer_id:
+            existing_custom_ids.add(c.custom_customer_id)
+    
+    # Track phones and custom_ids seen in this upload to prevent duplicates within the file
+    seen_phones_in_upload = set()
+    seen_custom_ids_in_upload = set()
     
     for idx, row in enumerate(reader, start=2):  # Start at 2 because row 1 is header
         total_rows += 1
         try:
+            print(f"🔍 Processing row {idx}: {dict(row)}")
+            
             # Common fields
             custom_id = (row.get('customer_id') or '').strip()
-            phone = (row.get('phone') or '').strip()
+            phone = (row.get('phone') or '').strip() or None
             email = (row.get('email') or '').strip() or None
             address = (row.get('address') or '').strip() or None
             city = (row.get('city') or '').strip() or None
@@ -286,47 +309,44 @@ async def bulk_upload_customers(
             pin = (row.get('pin') or '').strip() or None
             notes = (row.get('notes') or '').strip() or None
             
+            print(f"📋 Row {idx} - phone: '{phone}', custom_id: '{custom_id}', company: '{row.get('company_name')}'")
+            
             # Generate custom_customer_id if not provided
             if not custom_id:
                 from ..models import gen_custom_id
                 max_attempts = 10
                 for _ in range(max_attempts):
                     custom_id = gen_custom_id(6)
-                    existing = db.query(models.Customer).filter(
-                        models.Customer.org_id == principal.org_id,
-                        models.Customer.custom_customer_id == custom_id
-                    ).first()
-                    if not existing:
+                    if custom_id not in existing_custom_ids and custom_id not in seen_custom_ids_in_upload:
                         break
                 else:
                     custom_id = gen_custom_id(8)
             else:
                 # Check if custom_id already exists
-                existing = db.query(models.Customer).filter(
-                    models.Customer.org_id == principal.org_id,
-                    models.Customer.custom_customer_id == custom_id
-                ).first()
-                if existing:
-                    errors.append({"row": idx, "error": f"Customer ID '{custom_id}' already exists"})
+                if custom_id in existing_custom_ids:
+                    errors.append({"row": idx, "error": f"Customer ID '{custom_id}' already exists in database"})
+                    failed += 1
+                    continue
+                if custom_id in seen_custom_ids_in_upload:
+                    errors.append({"row": idx, "error": f"Duplicate Customer ID '{custom_id}' in upload file"})
                     failed += 1
                     continue
             
-            # Validate required fields
-            if not phone:
-                errors.append({"row": idx, "error": "Phone number is required"})
-                failed += 1
-                continue
-            
-            # Check for duplicate phone in same org
-            existing = db.query(models.Customer).filter(
-                models.Customer.org_id == principal.org_id,
-                models.Customer.phone == phone
-            ).first()
-            
-            if existing:
-                errors.append({"row": idx, "error": f"Customer with phone {phone} already exists"})
-                failed += 1
-                continue
+            # Check for duplicate phone if provided
+            if phone:
+                # Check for duplicate phone in database
+                if phone in existing_phones:
+                    print(f"❌ Row {idx} - Phone {phone} already exists in database")
+                    errors.append({"row": idx, "error": f"Customer with phone {phone} already exists in database"})
+                    failed += 1
+                    continue
+                
+                # Check for duplicate phone within this upload
+                if phone in seen_phones_in_upload:
+                    print(f"❌ Row {idx} - Duplicate phone {phone} in upload file")
+                    errors.append({"row": idx, "error": f"Duplicate phone {phone} in upload file"})
+                    failed += 1
+                    continue
             
             if ctype == 'b2c':
                 name = (row.get('name') or '').strip()
@@ -382,14 +402,40 @@ async def bulk_upload_customers(
                     created_by=principal.user_id,
                 )
             
-            db.add(customer)
-            db.commit()
+            customers_to_add.append(customer)
+            if phone:
+                seen_phones_in_upload.add(phone)
+            seen_custom_ids_in_upload.add(custom_id)
             successful += 1
             
         except Exception as e:
-            db.rollback()
+            print(f"❌ Error processing row {idx}: {str(e)}")
+            logger.error(f"Error processing row {idx}: {str(e)}")
             errors.append({"row": idx, "error": str(e)})
             failed += 1
+    
+    print(f"📊 Total processed: {total_rows}, Valid customers to add: {len(customers_to_add)}, Failed: {failed}")
+    logger.info(f"Total processed: {total_rows}, Valid customers to add: {len(customers_to_add)}, Failed: {failed}")
+    
+    # Batch commit all valid customers
+    try:
+        if customers_to_add:
+            print(f"💾 Committing {len(customers_to_add)} customers to database")
+            logger.info(f"Committing {len(customers_to_add)} customers to database")
+            db.add_all(customers_to_add)
+            db.commit()
+            print("✅ Commit successful")
+            logger.info("Commit successful")
+    except Exception as e:
+        print(f"💥 Database commit error: {str(e)}")
+        logger.error(f"Database commit error: {str(e)}")
+        db.rollback()
+        return {
+            "total_rows": total_rows,
+            "successful": 0,
+            "failed": total_rows,
+            "errors": [{"row": "all", "error": f"Database error during batch commit: {str(e)}"}]
+        }
     
     return {
         "total_rows": total_rows,

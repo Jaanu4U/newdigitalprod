@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import { usePathname } from "next/navigation";
-import { Home, Users, Settings, ShoppingCart, Truck, UserCircle, MessageCircle, Smartphone, ClipboardCheck, ChevronLeft, ChevronRight } from "lucide-react";
+import { Home, Users, Settings, ShoppingCart, Truck, UserCircle, MessageCircle, Smartphone, ClipboardCheck, ChevronLeft, ChevronRight, FileText } from "lucide-react";
 import { getTenantSlugFromHost } from "@/lib/tenant";
 
 interface SidebarProps {
@@ -27,6 +27,7 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
       return [
         { href: "/dashboard", label: "Dashboard", icon: Home },
         { href: "/orders", label: "Orders", icon: ShoppingCart },
+        { href: "/purchase-orders", label: "Purchase Orders", icon: FileText },
         { href: "/audit", label: "Order Audit", icon: ClipboardCheck },
         { href: "/customers", label: "Customers", icon: UserCircle },
         { href: "/whatsapp", label: "WhatsApp", icon: MessageCircle },

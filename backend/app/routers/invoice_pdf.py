@@ -192,7 +192,10 @@ def list_invoice_drafts(request: Request, principal: CurrentPrincipal = Depends(
     if not _role_can_invoice(principal.role or ''):
         raise HTTPException(status_code=403, detail='Not permitted to list invoice drafts')
     org = _collect_org(db, principal, request)
-    q = db.query(models.SyncLog).filter(models.SyncLog.org_id == org.org_id, models.SyncLog.type == 'invoice_draft').order_by(models.SyncLog.created_at.desc()).limit(min(limit, 500))
+    q = db.query(models.SyncLog).filter(
+        models.SyncLog.org_id == org.org_id, 
+        models.SyncLog.type == 'invoice_draft'
+    ).order_by(models.SyncLog.created_at.desc()).limit(min(limit, 500))
     rows = q.all()
     import json as _json
     
@@ -296,7 +299,11 @@ def list_invoice_drafts(request: Request, principal: CurrentPrincipal = Depends(
             data = _json.loads(r.payload or '{}')
         except Exception:
             data = {}
-        invoice_id = data.get('invoice_id')
+        
+        # Handle both invoice_id (for invoices) and order_id (for customer purchase orders)
+        invoice_id = data.get('invoice_id') or data.get('order_id')
+        invoice_no = data.get('invoice_no') or data.get('order_id')  # Use order_id as invoice_no for purchase orders
+        
         shipment_info = shipment_map.get(invoice_id)
         rider_delivery_status = rider_delivery_status_map.get(invoice_id)
         shipment_status = None
@@ -347,12 +354,12 @@ def list_invoice_drafts(request: Request, principal: CurrentPrincipal = Depends(
             'created_by': getattr(r, 'created_by', r.user_id),  # Use new field or fallback to user_id
             'created_by_name': user_map.get(getattr(r, 'created_by', r.user_id)),  # User name
             'invoice_id': invoice_id,
-            'invoice_no': data.get('invoice_no'),
+            'invoice_no': invoice_no,
             'customer_id': customer_id,
             'customer_name': customer_name,
             'customer_company_name': customer_company_name,
             'customer_phone': customer_phone,
-            'totals': data.get('totals') or {},
+            'totals': data.get('totals') or {'total': data.get('total', 0)},
             'items_count': len(data.get('items') or []),
             'rider_name': rider_map.get(invoice_id),  # Include rider assignment
             'rider_assignment_status': rider_status_map.get(invoice_id),  # pending, accepted, rejected
@@ -368,6 +375,166 @@ def list_invoice_drafts(request: Request, principal: CurrentPrincipal = Depends(
             } if shipment_info or rider_map.get(invoice_id) else None,
         })
     return {'drafts': drafts, 'count': len(drafts)}
+
+
+@router.get('/purchase-orders/list', response_model=Dict[str, Any])
+def list_purchase_orders(request: Request, principal: CurrentPrincipal = Depends(get_current_principal), db: Session = Depends(get_db), limit: int = 200):
+    """List customer purchase orders"""
+    import json as _json
+    
+    if not _role_can_invoice(principal.role or ''):
+        raise HTTPException(status_code=403, detail='Not permitted to list purchase orders')
+    
+    org = _collect_org(db, principal, request)
+    
+    # Query only customer_purchase_order type
+    q = db.query(models.SyncLog).filter(
+        models.SyncLog.org_id == org.org_id, 
+        models.SyncLog.type == 'customer_purchase_order'
+    ).order_by(models.SyncLog.created_at.desc()).limit(min(limit, 500))
+    
+    rows = q.all()
+    
+    purchase_orders = []
+    for r in rows:
+        try:
+            data = _json.loads(r.payload or '{}')
+        except Exception:
+            data = {}
+        
+        order_id = data.get('order_id')
+        customer_id = data.get('customer_id')
+        
+        purchase_orders.append({
+            'id': r.id,
+            'created_at': r.created_at.isoformat() + 'Z',
+            'order_id': order_id,
+            'customer_id': customer_id,
+            'customer_name': data.get('customer_name'),
+            'customer_phone': data.get('customer_phone'),
+            'customer_email': data.get('customer_email'),
+            'total': data.get('total', 0),
+            'subtotal': data.get('subtotal', 0),
+            'items_count': len(data.get('items') or []),
+            'items': data.get('items', []),
+            'status': data.get('status', 'pending'),
+            'delivery_address': data.get('delivery_address'),
+            'notes': data.get('notes')
+        })
+    
+    return {'purchase_orders': purchase_orders, 'count': len(purchase_orders)}
+
+
+@router.post('/purchase-orders/{order_log_id}/approve')
+def approve_purchase_order(
+    order_log_id: int,
+    principal: CurrentPrincipal = Depends(get_current_principal),
+    db: Session = Depends(get_db)
+):
+    """Approve a customer purchase order and notify customer"""
+    import json as _json
+    from datetime import datetime, timezone
+    
+    if not _role_can_invoice(principal.role or ''):
+        raise HTTPException(status_code=403, detail='Not permitted to approve purchase orders')
+    
+    # Get the purchase order
+    order_log = db.query(models.SyncLog).filter(
+        models.SyncLog.id == order_log_id,
+        models.SyncLog.type == 'customer_purchase_order'
+    ).first()
+    
+    if not order_log:
+        raise HTTPException(status_code=404, detail='Purchase order not found')
+    
+    try:
+        order_data = _json.loads(order_log.payload or '{}')
+        order_data['status'] = 'approved'
+        order_data['approved_at'] = datetime.now(timezone.utc).isoformat()
+        order_data['approved_by'] = principal.user_id
+        
+        # Update the order
+        order_log.payload = _json.dumps(order_data)
+        
+        # Create notification for customer
+        customer_notification = {
+            "type": "purchase_order_approved",
+            "order_id": order_data.get('order_id'),
+            "customer_id": order_data.get('customer_id'),
+            "message": f"Your purchase order {order_data.get('order_id')} has been approved",
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }
+        
+        notification_log = models.SyncLog(
+            org_id=order_log.org_id,
+            user_id=order_data.get('customer_id'),
+            type='customer_notification',
+            payload=_json.dumps(customer_notification),
+            created_at=datetime.now(timezone.utc)
+        )
+        db.add(notification_log)
+        
+        db.commit()
+        return {"status": "success", "message": "Purchase order approved"}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to approve order: {str(e)}")
+
+
+@router.post('/purchase-orders/{order_log_id}/reject')
+def reject_purchase_order(
+    order_log_id: int,
+    principal: CurrentPrincipal = Depends(get_current_principal),
+    db: Session = Depends(get_db)
+):
+    """Reject a customer purchase order and notify customer"""
+    import json as _json
+    from datetime import datetime, timezone
+    
+    if not _role_can_invoice(principal.role or ''):
+        raise HTTPException(status_code=403, detail='Not permitted to reject purchase orders')
+    
+    # Get the purchase order
+    order_log = db.query(models.SyncLog).filter(
+        models.SyncLog.id == order_log_id,
+        models.SyncLog.type == 'customer_purchase_order'
+    ).first()
+    
+    if not order_log:
+        raise HTTPException(status_code=404, detail='Purchase order not found')
+    
+    try:
+        order_data = _json.loads(order_log.payload or '{}')
+        order_data['status'] = 'rejected'
+        order_data['rejected_at'] = datetime.now(timezone.utc).isoformat()
+        order_data['rejected_by'] = principal.user_id
+        
+        # Update the order
+        order_log.payload = _json.dumps(order_data)
+        
+        # Create notification for customer
+        customer_notification = {
+            "type": "purchase_order_rejected",
+            "order_id": order_data.get('order_id'),
+            "customer_id": order_data.get('customer_id'),
+            "message": f"Your purchase order {order_data.get('order_id')} has been rejected",
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }
+        
+        notification_log = models.SyncLog(
+            org_id=order_log.org_id,
+            user_id=order_data.get('customer_id'),
+            type='customer_notification',
+            payload=_json.dumps(customer_notification),
+            created_at=datetime.now(timezone.utc)
+        )
+        db.add(notification_log)
+        
+        db.commit()
+        return {"status": "success", "message": "Purchase order rejected"}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to reject order: {str(e)}")
 
 
 @router.get('/invoice/{customer_id}', response_model=Dict[str, Any])
@@ -827,6 +994,17 @@ def delete_invoice_draft(draft_id: int, request: Request, principal: CurrentPrin
                         deleted_count += 1
                 except Exception as e:
                     logger.error(f"Error checking delivery log {dlog.id}: {e}")
+            
+            # 4. Delete from deliveries table (for rider dashboard)
+            deliveries = db.query(models.Delivery).filter(
+                models.Delivery.org_id == org.org_id,
+                models.Delivery.order_id == invoice_id
+            ).all()
+            
+            for delivery in deliveries:
+                logger.info(f"Deleting delivery {delivery.delivery_id} for invoice {invoice_id}")
+                db.delete(delivery)
+                deleted_count += 1
                     
     except Exception as e:
         logger.error(f"Error during delete cascade: {e}")
@@ -1418,4 +1596,110 @@ def update_shipping_address(payload: ShipmentAddressPayload, request: Request, p
         'status': 'ok',
         'shipping_address': payload.shipping_address,
     }
+
+
+@router.get('/notifications/unread-count', response_model=Dict[str, Any])
+def get_unread_notifications_count(
+    principal: CurrentPrincipal = Depends(get_current_principal),
+    db: Session = Depends(get_db)
+):
+    """Get count of unread admin notifications"""
+    import json as _json
+    
+    # Check if user has admin privileges
+    role_l = (principal.role or "").lower()
+    if role_l not in {"admin", "owner", "superadmin", "manager", "orders manager", "billing staff"}:
+        return {"unread_count": 0}
+    
+    # Get admin notifications from sync_log
+    notifications = db.query(models.SyncLog).filter(
+        models.SyncLog.org_id == principal.org_id,
+        models.SyncLog.type == 'admin_notification'
+    ).order_by(models.SyncLog.created_at.desc()).limit(50).all()
+    
+    unread_count = 0
+    for notif in notifications:
+        try:
+            data = _json.loads(notif.payload or '{}')
+            if not data.get('read', False):
+                unread_count += 1
+        except:
+            continue
+    
+    return {
+        "unread_count": unread_count
+    }
+
+
+@router.get('/notifications', response_model=Dict[str, Any])
+def get_notifications(
+    limit: int = 20,
+    principal: CurrentPrincipal = Depends(get_current_principal),
+    db: Session = Depends(get_db)
+):
+    """Get admin notifications"""
+    import json as _json
+    
+    # Check if user has admin privileges
+    role_l = (principal.role or "").lower()
+    if role_l not in {"admin", "owner", "superadmin", "manager", "orders manager", "billing staff"}:
+        return {"notifications": [], "total": 0}
+    
+    # Get admin notifications from sync_log
+    notifications_logs = db.query(models.SyncLog).filter(
+        models.SyncLog.org_id == principal.org_id,
+        models.SyncLog.type == 'admin_notification'
+    ).order_by(models.SyncLog.created_at.desc()).limit(limit).all()
+    
+    notifications = []
+    for notif in notifications_logs:
+        try:
+            data = _json.loads(notif.payload or '{}')
+            notifications.append({
+                "id": notif.id,
+                "type": data.get('type'),
+                "message": data.get('message'),
+                "order_id": data.get('order_id'),
+                "customer_name": data.get('customer_name'),
+                "total": data.get('total'),
+                "items_count": data.get('items_count'),
+                "read": data.get('read', False),
+                "created_at": notif.created_at.isoformat() + 'Z'
+            })
+        except:
+            continue
+    
+    return {
+        "notifications": notifications,
+        "total": len(notifications)
+    }
+
+
+@router.post('/notifications/{notification_id}/read')
+def mark_notification_read(
+    notification_id: int,
+    principal: CurrentPrincipal = Depends(get_current_principal),
+    db: Session = Depends(get_db)
+):
+    """Mark notification as read"""
+    import json as _json
+    
+    notification = db.query(models.SyncLog).filter(
+        models.SyncLog.id == notification_id,
+        models.SyncLog.org_id == principal.org_id,
+        models.SyncLog.type == 'admin_notification'
+    ).first()
+    
+    if not notification:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    
+    try:
+        data = _json.loads(notification.payload or '{}')
+        data['read'] = True
+        notification.payload = _json.dumps(data)
+        db.commit()
+        return {"status": "ok"}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to update notification: {str(e)}")
 

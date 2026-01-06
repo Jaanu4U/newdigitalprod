@@ -2,7 +2,7 @@
 import { Suspense, useEffect, useState, useMemo, useCallback } from "react";
 import { apiBase } from "@/lib/api";
 import { withTenantHeaders, getTenantSlugFromHost } from "@/lib/tenant";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { Eye, Truck, X, Package, CheckCircle, MapPin, MessageCircle, Upload, Download, Trash2, Edit } from "lucide-react";
 import PageHeader from "@/components/PageHeader";
@@ -53,6 +53,7 @@ interface ShipmentProvider {
 }
 
 function OrdersInner() {
+  const router = useRouter();
   const base = useMemo(() => apiBase(), []);
   const [mounted, setMounted] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -95,13 +96,20 @@ function OrdersInner() {
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [showBulkRiderModal, setShowBulkRiderModal] = useState(false);
   const [bulkAssigning, setBulkAssigning] = useState(false);
+  const [unreadNotifications, setUnreadNotifications] = useState(0);
   const searchParams = useSearchParams();
   const from = searchParams?.get('from');
 
   useEffect(() => {
+    const token = localStorage.getItem('dc_token') || localStorage.getItem('dc_access');
+    if (!token) {
+      router.push('/login');
+      return;
+    }
+    
     setMounted(true);
     try { setSlug(getTenantSlugFromHost()); } catch { setSlug(null); }
-  }, []);
+  }, [router]);
 
   useEffect(() => {
     // Fetch organization settings to get enabled providers and Google Maps API key
@@ -149,6 +157,23 @@ function OrdersInner() {
     }
   }, [addressInputMode, showAddressModal]);
 
+  // Fetch unread notifications count
+  const fetchNotificationsCount = async () => {
+    try {
+      const token = localStorage.getItem('dc_access') || '';
+      if (!token) return;
+      const res = await fetch(`${base}notifications/unread-count`, withTenantHeaders({
+        headers: { Authorization: `Bearer ${token}` }
+      }));
+      if (res.ok) {
+        const data = await res.json();
+        setUnreadNotifications(data.unread_count || 0);
+      }
+    } catch (e) {
+      console.error('Failed to fetch notifications count:', e);
+    }
+  };
+
   useEffect(() => {
     let timeout: any;
     let attempts = 0;
@@ -187,6 +212,17 @@ function OrdersInner() {
         setRows(data.drafts || []);
         setErr(null);
         setRetryInfo(null);
+        
+        // Fetch notifications count
+        try {
+          const notifRes = await fetch(`${base}notifications/unread-count`, withTenantHeaders({ headers: { Authorization: `Bearer ${token}` } }));
+          if (notifRes.ok) {
+            const notifData = await notifRes.json();
+            setUnreadNotifications(notifData.unread_count || 0);
+          }
+        } catch (e) {
+          console.error('Failed to fetch notifications:', e);
+        }
       } catch(e:any) {
         setErr(e.message || 'Failed loading drafts');
       } finally {
@@ -1106,6 +1142,13 @@ function OrdersInner() {
                   <Package className="w-8 h-8" />
                 </div>
                 <h1 className="text-3xl font-bold">Orders Management</h1>
+                {unreadNotifications > 0 && (
+                  <div className="relative">
+                    <div className="px-3 py-1 bg-red-500 text-white text-sm font-bold rounded-full animate-pulse">
+                      {unreadNotifications} New Order{unreadNotifications > 1 ? 's' : ''}
+                    </div>
+                  </div>
+                )}
               </div>
               <p className="text-purple-50 text-sm mb-4">Manage invoice drafts, shipments, and deliveries</p>
               

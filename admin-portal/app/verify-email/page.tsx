@@ -13,6 +13,7 @@ function VerifyEmailContent() {
 
   useEffect(() => {
     const token = searchParams.get("token");
+    const type = searchParams.get("type"); // Get type from URL params
     
     if (!token) {
       setStatus("error");
@@ -27,8 +28,18 @@ function VerifyEmailContent() {
         ? 'https://api.digitalchain.in/v1/'
         : 'http://localhost:8000/v1/';
 
+    // Determine which endpoint to use based on explicit type or default to org verification
+    // Customer portal explicitly sets type=customer, everything else is org verification
+    const isCustomerVerification = type === "customer";
+    const endpoint = isCustomerVerification
+      ? `${apiBase}customer-portal/verify-email?token=${token}`
+      : `${apiBase}org/verify-email?token=${token}`;
+    
+    console.log('[Verify Email] Using endpoint:', endpoint);
+    console.log('[Verify Email] Type:', type || 'org (default)');
+
     // Verify the email
-    fetch(`${apiBase}org/verify-email?token=${token}`)
+    fetch(endpoint)
       .then(async (res) => {
         const data = await res.json();
         
@@ -39,7 +50,9 @@ function VerifyEmailContent() {
           
           // Redirect to login after 3 seconds
           setTimeout(() => {
-            if (data.org_slug) {
+            if (type === "customer") {
+              router.push("/customer-login");
+            } else if (data.org_slug) {
               window.location.href = `https://${data.org_slug}.digitalchain.in/login`;
             } else {
               router.push("/login");

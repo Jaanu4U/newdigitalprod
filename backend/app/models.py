@@ -103,15 +103,26 @@ class Customer(Base):
     org_id = Column(String, ForeignKey("organizations.org_id"), nullable=False, index=True)
     custom_customer_id = Column(String, nullable=True, index=True)  # User-defined or auto-generated 6-char ID
     ctype = Column(String, nullable=False)  # 'B2B' or 'B2C'
-    name = Column(String, nullable=False)
+    name = Column(String, nullable=True)  # Optional for B2B (contact person), required for B2C
     company_name = Column(String, nullable=True)
     gstin = Column(String, nullable=True)
-    email = Column(String, nullable=True)
-    phone = Column(String, nullable=True)
+    email = Column(String, nullable=True, index=True)
+    phone = Column(String, nullable=True, index=True)
+    password_hash = Column(String, nullable=True)  # For customer portal login
+    email_verified = Column(Boolean, default=False)
+    phone_verified = Column(Boolean, default=False)
+    verification_token = Column(String, nullable=True, index=True)
+    verification_token_expires = Column(DateTime, nullable=True)
+    password_reset_token = Column(String, nullable=True, index=True)
+    password_reset_expires = Column(DateTime, nullable=True)
+    portal_access = Column(Boolean, default=False)  # Enable/disable portal access
+    last_login = Column(DateTime, nullable=True)
     address = Column(Text, nullable=True)
     city = Column(String, nullable=True)
     state = Column(String, nullable=True)
     pin = Column(String, nullable=True)
+    latitude = Column(String, nullable=True)
+    longitude = Column(String, nullable=True)
     notes = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -210,6 +221,7 @@ class MapsApiUsage(Base):
     __tablename__ = "maps_api_usage"
     id = Column(Integer, primary_key=True, autoincrement=True)
     org_id = Column(String, ForeignKey("organizations.org_id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(String, ForeignKey("users.user_id", ondelete="SET NULL"), nullable=True, index=True)
     endpoint = Column(String(255), nullable=False)
     request_count = Column(Integer, default=1)
     created_at = Column(DateTime, default=datetime.utcnow, index=True)

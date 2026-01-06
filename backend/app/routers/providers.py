@@ -20,6 +20,7 @@ def list_providers(
     db: Session = Depends(get_db),
     all: bool = Query(default=False, description="Include inactive providers (SuperAdmin only)"),
 ):
+    print(f"[List Providers] User: {principal.user_id}, Role: {principal.role}, Org: {principal.org_id}, all={all}")
     q = db.query(models.ShipmentProvider)
     if not all or (principal.role or "").lower() != "superadmin":
         q = q.filter(models.ShipmentProvider.active == True)  # noqa: E712
@@ -45,6 +46,9 @@ def create_provider(
     principal: CurrentPrincipal = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    print(f"[Create Provider] User: {principal.user_id}, Role: {principal.role}, Org: {principal.org_id}")
+    print(f"[Create Provider] Payload: name={payload.name}, code={payload.code}")
+    
     _require_superadmin(principal)
     # Ensure unique code
     existing = (
@@ -53,6 +57,7 @@ def create_provider(
         .first()
     )
     if existing:
+        print(f"[Create Provider] Code already exists: {payload.code.upper()}")
         raise HTTPException(status_code=409, detail="Provider code already exists")
     p = models.ShipmentProvider(
         name=payload.name,
@@ -63,6 +68,7 @@ def create_provider(
     db.add(p)
     db.commit()
     db.refresh(p)
+    print(f"[Create Provider] Success: {p.provider_id}, name={p.name}, code={p.code}")
     return {"status": "ok", "provider_id": p.provider_id}
 
 
