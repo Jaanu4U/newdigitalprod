@@ -97,12 +97,29 @@ function initializeClient(sessionId) {
     qrCodes.delete(sessionId);
   });
 
-  // Message event (for location retrieval)
+  // Message event (for location retrieval and auto-update)
   client.on('message', async (message) => {
-    // Store location messages for retrieval
+    // Auto-update shipping address when location is received
     if (message.location) {
-      console.log(`Location received from ${message.from}:`, message.location);
-      // You can store this in a database or cache for later retrieval
+      console.log(`📍 Location received from ${message.from}:`, message.location);
+      
+      // Extract phone number from message.from (format: 91XXXXXXXXXX@c.us)
+      const phoneNumber = message.from.split('@')[0];
+      
+      try {
+        // Call backend to update shipping address for this customer's pending orders
+        const axios = require('axios');
+        const response = await axios.post('http://localhost:8000/v1/whatsapp/location-update', {
+          phone_number: phoneNumber,
+          latitude: message.location.latitude,
+          longitude: message.location.longitude,
+          description: message.location.description || null
+        });
+        
+        console.log(`✅ Shipping address auto-updated for ${phoneNumber}:`, response.data);
+      } catch (error) {
+        console.error(`❌ Failed to auto-update shipping address for ${phoneNumber}:`, error.message);
+      }
     }
   });
 
@@ -253,8 +270,35 @@ app.post('/api/whatsapp/get-location', async (req, res) => {
     const chatId = formattedNumber + '@c.us';
     console.log(`[get-location] Formatted chatId: ${chatId}`);
     
-    // Try to get all chats and find the matching one
-    const chats = await client.getChats();
+    // Add timeout wrapper for all async operations
+    const timeout = (ms, promise, errorMsg) => {
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          reject(new Error(errorMsg));
+        }, ms);
+        
+        promise.then(
+          (value) => {
+            clearTimeout(timer);
+            resolve(value);
+          },
+          (error) => {
+            clearTimeout(timer);
+            reject(error);
+          }
+        );
+      });
+    };
+    
+    // Try to get all chats with timeout
+    console.log('[get-location] Fetching chats...');
+    const chats = await timeout(
+      10000, 
+      client.getChats(),
+      'Timeout while fetching chats from WhatsApp'
+    );
+    console.log(`[get-location] Retrieved ${chats.length} chats`);
+    
     const matchingChat = chats.find(chat => 
       chat.id._serialized === chatId || 
       chat.id.user === formattedNumber
@@ -270,8 +314,13 @@ app.post('/api/whatsapp/get-location', async (req, res) => {
     
     console.log(`[get-location] Chat found: ${matchingChat.id._serialized}`);
     
-    // Fetch recent messages
-    const messages = await matchingChat.fetchMessages({ limit: 100 });
+    // Fetch recent messages with timeout (reduced limit for faster response)
+    console.log('[get-location] Fetching messages...');
+    const messages = await timeout(
+      15000,
+      matchingChat.fetchMessages({ limit: 50 }),
+      'Timeout while fetching messages from WhatsApp. Try again or reduce the number of messages.'
+    );
     console.log(`[get-location] Fetched ${messages.length} messages`);
     
     // Find the most recent location message
@@ -295,10 +344,10 @@ app.post('/api/whatsapp/get-location', async (req, res) => {
       timestamp: locationMessage.timestamp
     });
   } catch (error) {
-    console.error('[get-location] Error:', error.message);
+    console.error('[get-location] Error:', error.message, error.stack);
     res.status(500).json({ 
       success: false,
-      error: error.message 
+      error: error.message || 'Failed to fetch location from WhatsApp'
     });
   }
 });

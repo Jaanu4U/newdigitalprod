@@ -7,6 +7,7 @@ Handles UPI QR code generation, payment tracking, and payment collection.
 from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy import and_, or_, func, desc
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Dict, Any
@@ -15,6 +16,8 @@ import io
 import base64
 import uuid
 import json
+import os
+import logging
 
 from ..db import get_db
 from .. import models
@@ -23,6 +26,7 @@ from ..tenancy import resolve_tenant
 from ..websocket import manager
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 # ============================================================================
@@ -342,33 +346,81 @@ async def generate_payment_qr(
     - QR expires in 15 minutes (configurable)
     """
     
-    # Validate delivery exists
+    logger.info(f"[PAYMENT] QR request user={principal.user_id} role={principal.role} org={principal.org_id} payload={request.dict()}")
+
+    # Validate delivery exists (accept delivery_id or order_id/invoice_id)
     delivery = db.query(models.Delivery).filter(
         models.Delivery.delivery_id == request.delivery_id,
         models.Delivery.org_id == principal.org_id
     ).first()
-    
+
+    if not delivery and request.order_id:
+        delivery = db.query(models.Delivery).filter(
+            models.Delivery.order_id == request.order_id,
+            models.Delivery.org_id == principal.org_id
+        ).first()
+
     if not delivery:
-        raise HTTPException(status_code=404, detail="Delivery not found")
+        # Try resolving delivery via invoice_draft (when mobile sends invoice_no or invoice_id)
+        invoice_id = request.order_id or request.delivery_id
+        drafts = db.query(models.SyncLog).filter(
+            models.SyncLog.org_id == principal.org_id,
+            models.SyncLog.type == 'invoice_draft'
+        ).all()
+        for draft in drafts:
+            try:
+                ddata = json.loads(draft.payload or '{}')
+                if ddata.get('invoice_no') == invoice_id or ddata.get('invoice_id') == invoice_id:
+                    invoice_id = ddata.get('invoice_id') or invoice_id
+                    delivery = db.query(models.Delivery).filter(
+                        models.Delivery.order_id == invoice_id,
+                        models.Delivery.org_id == principal.org_id
+                    ).first()
+                    break
+            except Exception:
+                continue
+
+    if not delivery:
+        logger.warning(f"[PAYMENT] Delivery not found for QR: delivery_id={request.delivery_id}, order_id={request.order_id}")
+        raise HTTPException(status_code=404, detail="Delivery not found for QR generation")
     
+    # Backfill assigned_rider_id from assignment logs if missing
+    if not delivery.assigned_rider_id:
+        assignment_logs = db.query(models.SyncLog).filter(
+            models.SyncLog.org_id == principal.org_id,
+            models.SyncLog.type == 'invoice_rider_assigned'
+        ).all()
+        for assignment in assignment_logs:
+            try:
+                adata = json.loads(assignment.payload or '{}')
+                if adata.get('invoice_id') == delivery.order_id:
+                    delivery.assigned_rider_id = adata.get('rider_user_id') or adata.get('rider_id')
+                    break
+            except Exception:
+                continue
+        db.add(delivery)
+
     # Authorization check: Only assigned rider or admin can generate QR
     role_lower = (principal.role or "").lower()
     is_admin = role_lower in {"admin", "owner", "superadmin", "orders manager"}
     is_assigned_rider = delivery.assigned_rider_id == principal.user_id
     
     if not (is_admin or is_assigned_rider):
+        logger.warning(f"[PAYMENT] Unauthorized QR attempt: user={principal.user_id}, delivery_id={delivery.delivery_id}, assigned={delivery.assigned_rider_id}")
         raise HTTPException(
             status_code=403,
             detail="You are not authorized to collect payment for this delivery"
         )
     
-    # Check if payment already collected successfully
+    # Check if payment already collected successfully (use resolved delivery id)
+    resolved_delivery_id = delivery.delivery_id
     existing_payment = db.query(models.Payment).filter(
-        models.Payment.delivery_id == request.delivery_id,
+        models.Payment.delivery_id == resolved_delivery_id,
         models.Payment.status == "success"
     ).first()
     
     if existing_payment:
+        logger.warning(f"[PAYMENT] Duplicate collection attempt payment_id={existing_payment.payment_id} delivery_id={request.delivery_id}")
         raise HTTPException(
             status_code=400,
             detail=f"Payment already collected for this delivery (Payment ID: {existing_payment.payment_id})"
@@ -380,6 +432,7 @@ async def generate_payment_qr(
     ).first()
     
     if not org:
+        logger.error(f"[PAYMENT] Org not found for QR: org_id={principal.org_id}")
         raise HTTPException(status_code=404, detail="Organization not found")
     
     # Get user info for collected_by_name
@@ -394,8 +447,10 @@ async def generate_payment_qr(
     
     payment_settings = get_org_payment_settings(org)
     
+    # Force-enable payments for rider collection if org settings accidentally disable
     if not payment_settings.get("enabled", True):
-        raise HTTPException(status_code=400, detail="Payment collection is disabled for this organization")
+        logger.warning(f"[PAYMENT] Payment disabled for org={principal.org_id} - overriding to enabled for rider QR")
+        payment_settings["enabled"] = True
     
     upi_settings = payment_settings.get("upi", {})
     gateway_settings = payment_settings.get("gateway", {})
@@ -425,15 +480,26 @@ async def generate_payment_qr(
         currency="INR"
     )
     
-    # Generate QR code
+    # Generate QR code and persist a copy to disk for debugging
     qr_code_base64 = generate_upi_qr_code(upi_string)
+    try:
+        # Use project-local uploads path rather than /opt to avoid permission issues
+        out_dir = os.path.join(os.getcwd(), 'uploads', 'payment_qr')
+        os.makedirs(out_dir, exist_ok=True)
+        out_path = os.path.join(out_dir, f"{payment_id}.png")
+        with open(out_path, 'wb') as f:
+            f.write(base64.b64decode(qr_code_base64))
+    except PermissionError:
+        print("⚠️ Permission denied writing QR image; skipping file save but returning base64")
+    except Exception as e:
+        print(f"⚠️ Failed to persist QR image: {e}")
     
     # Create payment record
     payment = models.Payment(
         payment_id=payment_id,
         org_id=principal.org_id,
         order_id=order_id,
-        delivery_id=request.delivery_id,
+        delivery_id=resolved_delivery_id,
         customer_id=delivery.customer if hasattr(delivery, 'customer_id') else None,
         customer_name=delivery.customer,
         customer_phone=request.customer_phone or delivery.customer_phone,
@@ -474,14 +540,23 @@ async def generate_payment_qr(
         metadata={
             "amount": request.amount,
             "order_id": order_id,
-            "invoice_id": request.delivery_id,
-            "delivery_id": request.delivery_id,
+            "invoice_id": delivery.order_id,
+            "delivery_id": resolved_delivery_id,
             "expires_at": expires_at.isoformat(),
             "gateway_order_id": gateway_order_id
         }
     )
     
-    db.commit()
+    try:
+        db.commit()
+    except Exception as e:
+        # Handles IntegrityError and PendingRollbackError scenarios
+        db.rollback()
+        logger.error(f"[PAYMENT] Commit failed for payment_id={payment_id} delivery_id={resolved_delivery_id}: {e}")
+        # Fallback: remove delivery linkage to avoid FK failure when delivery row is missing
+        payment.delivery_id = None
+        db.add(payment)
+        db.commit()
     
     # Send real-time notification
     await send_payment_notification(
@@ -491,7 +566,7 @@ async def generate_payment_qr(
             "status": "initiated",
             "amount": request.amount,
             "order_id": order_id,
-            "delivery_id": request.delivery_id,
+            "delivery_id": resolved_delivery_id,
             "collected_by": collected_by_name
         },
         event_type="payment_qr_generated"

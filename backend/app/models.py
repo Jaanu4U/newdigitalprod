@@ -77,6 +77,7 @@ class Delivery(Base):
     status = Column(String, default="assigned")
     rider_status = Column(String, nullable=True)  # assigned, accepted, in_transit, delivered, completed
     assigned_rider_id = Column(String, ForeignKey("users.user_id"), nullable=True, index=True)
+    route_sequence = Column(Integer, nullable=True)  # Optimized delivery sequence for the rider
     shipment_provider_id = Column(String, ForeignKey("shipment_providers.provider_id"), nullable=True)
     tracking_number = Column(String, nullable=True)
     # Audit timestamps

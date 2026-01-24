@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiBase } from "@/lib/api";
 import { getTenantSlugFromHost, withTenantHeaders } from "@/lib/tenant";
-import { User, KeyRound, Loader2, Building, Save, AlertCircle, Crosshair, MapPin, Package, MessageCircle, Briefcase, CreditCard, Mail, ChevronDown, ChevronUp } from "lucide-react";
+import { User, KeyRound, Loader2, Building, Save, AlertCircle, Crosshair, MapPin, Package, MessageCircle, Briefcase, CreditCard, Mail, ChevronDown, ChevronUp, Receipt } from "lucide-react";
 import PageHeader from "@/components/PageHeader";
 import { REGIONS, TIMEZONES, detectBrowserTimeZone } from "@/lib/constants";
 
@@ -41,6 +41,7 @@ interface OrgSettings {
   business_settings?: any;
   provider_settings?: any;
   whatsapp_settings?: any;
+  communication_settings?: any;
 }
 
 type PaymentSettings = {
@@ -102,6 +103,11 @@ type WhatsAppSettings = {
   accounts?: WhatsAppAccount[];
 };
 
+type CommunicationSettings = {
+  card_receipt_enabled?: boolean;
+  card_receipt_email?: string;
+};
+
 export default function SettingsPage() {
   const router = useRouter();
   const [me, setMe] = useState<Me | null>(null);
@@ -142,6 +148,7 @@ export default function SettingsPage() {
   const [business, setBusiness] = useState<BusinessSettings>({});
   const [providers, setProviders] = useState<ProviderSettings>({ enabled_provider_codes: [] });
   const [whatsapp, setWhatsApp] = useState<WhatsAppSettings>({ enabled: false, accounts: [] });
+    const [communication, setCommunication] = useState<CommunicationSettings>({ card_receipt_enabled: false, card_receipt_email: "" });
   const [availableProviders, setAvailableProviders] = useState<Array<{code: string, name: string}>>([]);
 
   // Collapsible section states - all default to false (hidden)
@@ -153,6 +160,8 @@ export default function SettingsPage() {
   const [showBusinessSettings, setShowBusinessSettings] = useState(false);
   const [showProvidersSettings, setShowProvidersSettings] = useState(false);
   const [showWhatsAppSettings, setShowWhatsAppSettings] = useState(false);
+  const [showCommunicationSettings, setShowCommunicationSettings] = useState(false);
+  const [savingCommunication, setSavingCommunication] = useState(false);
 
   const base = useMemo(() => apiBase(), []);
 
@@ -278,6 +287,10 @@ export default function SettingsPage() {
         enabled: Boolean(data.whatsapp_settings?.enabled) || false,
         provider: data.whatsapp_settings?.provider || "whatsapp-web-js",
         accounts: data.whatsapp_settings?.accounts || [],
+      });
+      setCommunication({
+        card_receipt_enabled: Boolean(data.communication_settings?.card_receipt_enabled) || false,
+        card_receipt_email: data.communication_settings?.card_receipt_email || "",
       });
     } catch (e: any) {
       // Silently fail if org settings not available
@@ -420,6 +433,22 @@ export default function SettingsPage() {
       setError(e.message || "Failed to save UPI settings");
     } finally {
       setSavingUpi(false);
+    }
+  };
+
+  const handleSaveCommunication = async () => {
+    setError(null);
+    setSuccess(null);
+    setSavingCommunication(true);
+    try {
+      await putOrgSettings({ communication_settings: communication });
+      await fetchOrgSettings(token);
+      setSuccess("Communication settings updated");
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (e: any) {
+      setError(e.message || "Failed to save communication settings");
+    } finally {
+      setSavingCommunication(false);
     }
   };
 
@@ -1014,6 +1043,82 @@ export default function SettingsPage() {
                 </button>
               </div>
               </div>
+              )}
+            </div>
+
+            {/* Communication Settings */}
+            <div className="bg-white rounded-lg border border-gray-200 shadow-sm mb-6">
+              <button
+                type="button"
+                onClick={() => setShowCommunicationSettings(!showCommunicationSettings)}
+                className="w-full flex items-center justify-between p-6 hover:bg-gray-50 transition-colors text-left"
+              >
+                <div className="flex items-center gap-3 flex-1">
+                  <div className="h-10 w-10 rounded-full bg-indigo-600 flex items-center justify-center">
+                    <Receipt size={20} className="text-white" />
+                  </div>
+                  <div className="text-left flex-1">
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-lg font-semibold text-gray-900">Communication</h3>
+                      <span className={`px-2 py-1 text-xs font-medium rounded-full ${communication.card_receipt_enabled && communication.card_receipt_email ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>
+                        {communication.card_receipt_enabled && communication.card_receipt_email ? 'Configured' : 'Not Configured'}
+                      </span>
+                    </div>
+                    <p className="text-sm text-gray-500">Send card payment completion emails to your ops inbox</p>
+                  </div>
+                </div>
+                {showCommunicationSettings ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
+              </button>
+              {showCommunicationSettings && (
+                <div className="px-6 pb-6 border-t">
+                  <div className="space-y-4 pt-6">
+                    <label className="inline-flex items-center gap-2 text-sm text-gray-700">
+                      <input
+                        type="checkbox"
+                        checked={!!communication.card_receipt_enabled}
+                        onChange={(e) => setCommunication({ ...communication, card_receipt_enabled: e.target.checked })}
+                      />
+                      Enable card receipt emails
+                    </label>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="md:col-span-2">
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Card receipt email
+                        </label>
+                        <input
+                          type="email"
+                          value={communication.card_receipt_email || ""}
+                          onChange={(e) => setCommunication({ ...communication, card_receipt_email: e.target.value })}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-brand-500 focus:border-brand-500"
+                          placeholder="ops@yourcompany.com"
+                          disabled={!communication.card_receipt_enabled}
+                        />
+                        <p className="text-xs text-gray-500 mt-1">
+                          We will email completed card payment receipts to this address when enabled.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex justify-end pt-4 border-t mt-4">
+                    <button
+                      onClick={handleSaveCommunication}
+                      disabled={savingCommunication}
+                      className="inline-flex items-center gap-2 px-6 py-2 rounded-md bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+                    >
+                      {savingCommunication ? (
+                        <>
+                          <Loader2 size={16} className="animate-spin" />
+                          Saving...
+                        </>
+                      ) : (
+                        <>
+                          <Save size={16} />
+                          Save Changes
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
               )}
             </div>
 

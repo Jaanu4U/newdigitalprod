@@ -12,6 +12,249 @@ const OrderTrackingMap = dynamic(() => import('@/components/OrderTrackingMap'), 
   loading: () => <div className="flex items-center justify-center h-full"><div className="text-sm text-gray-500">Loading map...</div></div>
 });
 
+// Route Map Component for visualizing optimized routes
+function RouteMapComponent({ pickupLocation, deliveries }: { pickupLocation: any, deliveries: any[] }) {
+  const [map, setMap] = useState<any>(null);
+  const [isMapReady, setIsMapReady] = useState(false);
+
+  useEffect(() => {
+    // Wait for Google Maps to be available
+    const checkGoogleMaps = () => {
+      if (typeof window === 'undefined') return false;
+      if (!window.google || !window.google.maps) return false;
+      return true;
+    };
+
+    if (!checkGoogleMaps()) {
+      console.log('⏳ Waiting for Google Maps to load...');
+      const interval = setInterval(() => {
+        if (checkGoogleMaps()) {
+          console.log('✅ Google Maps ready, rendering map');
+          setIsMapReady(true);
+          clearInterval(interval);
+        }
+      }, 100);
+      
+      // Cleanup interval after 10 seconds
+      setTimeout(() => clearInterval(interval), 10000);
+      return () => clearInterval(interval);
+    } else {
+      setIsMapReady(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isMapReady) return;
+    if (typeof window === 'undefined' || !window.google) return;
+
+    const mapElement = document.getElementById('route-map');
+    if (!mapElement) return;
+    
+    console.log('🗺️ Initializing map with', deliveries.length, 'deliveries');
+
+    // Calculate bounds to fit all points
+    const bounds = new window.google.maps.LatLngBounds();
+    
+    if (pickupLocation) {
+      bounds.extend(new window.google.maps.LatLng(pickupLocation.latitude, pickupLocation.longitude));
+    }
+    
+    deliveries.forEach((d: any) => {
+      bounds.extend(new window.google.maps.LatLng(d.latitude, d.longitude));
+    });
+
+    // Create map
+    const mapInstance = new window.google.maps.Map(mapElement, {
+      center: bounds.getCenter(),
+      zoom: 12,
+      mapTypeControl: true,
+      streetViewControl: false,
+      fullscreenControl: true
+    });
+
+    mapInstance.fitBounds(bounds);
+    setMap(mapInstance);
+
+    const markers: any[] = [];
+    
+    // Add pickup location marker (green)
+    if (pickupLocation) {
+      const pickupMarker = new window.google.maps.Marker({
+        position: { lat: pickupLocation.latitude, lng: pickupLocation.longitude },
+        map: mapInstance,
+        icon: {
+          path: window.google.maps.SymbolPath.CIRCLE,
+          scale: 12,
+          fillColor: '#10B981',
+          fillOpacity: 1,
+          strokeColor: '#fff',
+          strokeWeight: 3
+        },
+        title: 'Pickup Location',
+        label: {
+          text: 'P',
+          color: '#fff',
+          fontSize: '12px',
+          fontWeight: 'bold'
+        }
+      });
+
+      const pickupInfoWindow = new window.google.maps.InfoWindow({
+        content: `<div class="p-2">
+          <div class="font-bold text-green-700">Pickup Location</div>
+          <div class="text-sm text-gray-600">${pickupLocation.address || 'Start Point'}</div>
+        </div>`
+      });
+
+      pickupMarker.addListener('click', () => {
+        pickupInfoWindow.open(mapInstance, pickupMarker);
+      });
+
+      markers.push(pickupMarker);
+    }
+
+    // Add delivery markers (blue, numbered by route_sequence)
+    deliveries.forEach((delivery: any) => {
+      const deliveryMarker = new window.google.maps.Marker({
+        position: { lat: delivery.latitude, lng: delivery.longitude },
+        map: mapInstance,
+        icon: {
+          path: window.google.maps.SymbolPath.CIRCLE,
+          scale: 10,
+          fillColor: '#3B82F6',
+          fillOpacity: 1,
+          strokeColor: '#fff',
+          strokeWeight: 2
+        },
+        title: `${delivery.customer} - Stop #${delivery.route_sequence}`,
+        label: {
+          text: String(delivery.route_sequence),
+          color: '#fff',
+          fontSize: '11px',
+          fontWeight: 'bold'
+        }
+      });
+
+      const infoWindow = new window.google.maps.InfoWindow({
+        content: `<div class="p-2">
+          <div class="font-bold text-blue-700">Stop #${delivery.route_sequence}</div>
+          <div class="text-sm font-medium text-gray-900">${delivery.customer}</div>
+          <div class="text-xs text-gray-600 mt-1">${delivery.address}</div>
+          ${delivery.customer_phone ? `<div class="text-xs text-gray-600">📞 ${delivery.customer_phone}</div>` : ''}
+          ${delivery.tracking_number ? `<div class="text-xs text-gray-500 mt-1">Tracking: ${delivery.tracking_number}</div>` : ''}
+          <div class="mt-1">
+            <span class="inline-block px-2 py-0.5 rounded text-xs ${
+              delivery.rider_status === 'delivered' ? 'bg-green-100 text-green-800' :
+              delivery.rider_status === 'in_transit' ? 'bg-blue-100 text-blue-800' :
+              'bg-yellow-100 text-yellow-800'
+            }">${delivery.rider_status}</span>
+          </div>
+        </div>`
+      });
+
+      deliveryMarker.addListener('click', () => {
+        infoWindow.open(mapInstance, deliveryMarker);
+      });
+
+      markers.push(deliveryMarker);
+    });
+
+    // Draw route using Directions API for road routes
+    const directionsService = new window.google.maps.DirectionsService();
+    const directionsRenderer = new window.google.maps.DirectionsRenderer({
+      map: mapInstance,
+      suppressMarkers: true, // We'll show our own markers
+      polylineOptions: {
+        strokeColor: '#2563EB',
+        strokeOpacity: 0.8,
+        strokeWeight: 4
+      }
+    });
+
+    // Build waypoints array (all delivery points except last)
+    const waypoints = [];
+    for (let i = 0; i < deliveries.length - 1; i++) {
+      waypoints.push({
+        location: { lat: deliveries[i].latitude, lng: deliveries[i].longitude },
+        stopover: true
+      });
+    }
+
+    // Calculate route from pickup through all deliveries
+    const origin = pickupLocation 
+      ? { lat: pickupLocation.latitude, lng: pickupLocation.longitude }
+      : { lat: deliveries[0].latitude, lng: deliveries[0].longitude };
+    
+    const destination = { 
+      lat: deliveries[deliveries.length - 1].latitude, 
+      lng: deliveries[deliveries.length - 1].longitude 
+    };
+
+    console.log('🚗 Calculating road route with', waypoints.length, 'waypoints');
+
+    directionsService.route(
+      {
+        origin: origin,
+        destination: destination,
+        waypoints: waypoints,
+        optimizeWaypoints: false, // Don't optimize, use our sequence
+        travelMode: window.google.maps.TravelMode.DRIVING
+      },
+      (result, status) => {
+        if (status === 'OK' && result) {
+          console.log('✅ Road route calculated successfully');
+          directionsRenderer.setDirections(result);
+        } else {
+          console.error('❌ Directions request failed:', status);
+          // Fallback to straight line if directions fail
+          const pathCoordinates = [];
+          if (pickupLocation) {
+            pathCoordinates.push({ lat: pickupLocation.latitude, lng: pickupLocation.longitude });
+          }
+          deliveries.forEach((d: any) => {
+            pathCoordinates.push({ lat: d.latitude, lng: d.longitude });
+          });
+
+          const routeLine = new window.google.maps.Polyline({
+            path: pathCoordinates,
+            geodesic: true,
+            strokeColor: '#2563EB',
+            strokeOpacity: 0.8,
+            strokeWeight: 3,
+            map: mapInstance
+          });
+        }
+      }
+    );
+
+    // Cleanup
+    return () => {
+      markers.forEach(m => m.setMap(null));
+      directionsRenderer.setMap(null);
+    };
+  }, [pickupLocation, deliveries, isMapReady]);
+
+  if (!isMapReady) {
+    return (
+      <div className="w-full h-full min-h-[600px] flex items-center justify-center bg-gray-50">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <p className="text-gray-600">Loading map...</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div id="route-map" className="w-full h-full min-h-[600px]"></div>
+  );
+}
+
+const RouteMapView = dynamic(() => Promise.resolve(RouteMapComponent), {
+  ssr: false,
+  loading: () => <div className="flex items-center justify-center h-full"><div className="text-sm text-gray-500">Loading map...</div></div>
+});
+
 interface OrderAudit {
   invoice_id: string;
   invoice_no: string;
@@ -40,6 +283,7 @@ interface OrderAudit {
   payment_details: any;
   pod_image_url: string | null;
   delivery_notes: string | null;
+  cancellation_reason?: string | null;
   created_by: string | null;
 }
 
@@ -55,10 +299,12 @@ interface Summary {
 interface RiderStats {
   rider_name: string;
   rider_email: string;
+  rider_user_id: string;  // Add rider_user_id for route map
   total_assigned: number;
   completed: number;
   in_transit: number;
   amount_delivered: number;
+  has_optimized_route?: boolean;
 }
 
 export default function AuditPage() {
@@ -98,6 +344,10 @@ export default function AuditPage() {
   const [podImageUrl, setPodImageUrl] = useState<string | null>(null);
   const [riderLocations, setRiderLocations] = useState<Map<string, { lat: number; lng: number; timestamp: string }>>(new Map());
   const [mapModalOrder, setMapModalOrder] = useState<OrderAudit | null>(null);
+  const [showRouteMapModal, setShowRouteMapModal] = useState(false);
+  const [routeMapData, setRouteMapData] = useState<any>(null);
+  const [selectedRiderForMap, setSelectedRiderForMap] = useState<RiderStats | null>(null);
+  const [loadingRouteMap, setLoadingRouteMap] = useState(false);
   
   // WebSocket connection
   const { isConnected } = useWebSocket((message) => {
@@ -260,6 +510,37 @@ export default function AuditPage() {
   useEffect(() => {
     setMounted(true);
   }, []);
+  
+  // Load Google Maps API when route map modal is shown
+  useEffect(() => {
+    if (!showRouteMapModal) return;
+    
+    // Check if Google Maps is already loaded
+    if (window.google && window.google.maps) {
+      console.log('🗺️ Google Maps already loaded');
+      return;
+    }
+
+    console.log('🗺️ Loading Google Maps API...');
+    const existingScript = document.querySelector('script[src*="maps.googleapis.com"]');
+    if (existingScript) {
+      console.log('🗺️ Google Maps script already exists, waiting for load...');
+      return;
+    }
+
+    const googleMapsApiKey = 'AIzaSyDJVgqPI6Gbu1YXxMBZnJazQ43r7O9nmv0';
+    const script = document.createElement('script');
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${googleMapsApiKey}`;
+    script.async = true;
+    script.defer = true;
+    script.onload = () => {
+      console.log('✅ Google Maps API loaded');
+    };
+    script.onerror = () => {
+      console.error('❌ Failed to load Google Maps API');
+    };
+    document.head.appendChild(script);
+  }, [showRouteMapModal]);
   
   useEffect(() => {
     // Set date range based on preset
@@ -543,6 +824,40 @@ export default function AuditPage() {
     }
   };
 
+  const fetchRouteMap = async (riderUserId: string, riderName: string) => {
+    console.log('🗺️ Fetching route map for rider:', riderName, riderUserId);
+    setLoadingRouteMap(true);
+    try {
+      const token = localStorage.getItem('dc_access');
+      const url = `${base}rider/${riderUserId}/route-map`;
+      console.log('📡 Fetching route map from URL:', url);
+      
+      const response = await fetch(
+        url,
+        withTenantHeaders({
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        })
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        console.log(`🗺️ Route map loaded:`, data);
+        setRouteMapData(data);
+        setShowRouteMapModal(true);
+      } else {
+        const error = await response.json();
+        alert(`Failed to load route map: ${error.detail || 'Unknown error'}`);
+      }
+    } catch (err) {
+      console.error('Failed to fetch route map:', err);
+      alert('Failed to load route map');
+    } finally {
+      setLoadingRouteMap(false);
+    }
+  };
+
   const handleViewDetails = (order: OrderAudit) => {
     console.log('📋 Viewing order details:', order.invoice_no);
     console.log('🖼️ POD URL:', order.pod_image_url);
@@ -577,6 +892,8 @@ export default function AuditPage() {
         return 'bg-yellow-100 text-yellow-800';
       case 'assigned':
         return 'bg-gray-100 text-gray-800';
+      case 'cancelled':
+        return 'bg-red-100 text-red-800';
       default:
         return 'bg-gray-100 text-gray-800';
     }
@@ -664,12 +981,14 @@ export default function AuditPage() {
                 <thead>
                   <tr className="border-b">
                     <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Rider</th>
+                    <th className="text-center py-3 px-4 text-sm font-semibold text-gray-700">Route</th>
                     <th className="text-center py-3 px-4 text-sm font-semibold text-gray-700">Live Location</th>
                     <th className="text-right py-3 px-4 text-sm font-semibold text-gray-700">Assigned</th>
                     <th className="text-right py-3 px-4 text-sm font-semibold text-gray-700">Completed</th>
                     <th className="text-right py-3 px-4 text-sm font-semibold text-gray-700">In Transit</th>
                     <th className="text-right py-3 px-4 text-sm font-semibold text-gray-700">Amount Delivered</th>
                     <th className="text-right py-3 px-4 text-sm font-semibold text-gray-700">Completion Rate</th>
+                    <th className="text-center py-3 px-4 text-sm font-semibold text-gray-700">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -682,6 +1001,18 @@ export default function AuditPage() {
                         <td className="py-3 px-4">
                           <div className="font-medium text-gray-900">{rider.rider_name}</div>
                           <div className="text-sm text-gray-500">{rider.rider_email}</div>
+                        </td>
+                        <td className="py-3 px-4 text-center">
+                          {rider.has_optimized_route ? (
+                            <div className="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-700 rounded-full text-xs font-medium" title="Route optimized">
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+                              </svg>
+                              Optimized
+                            </div>
+                          ) : (
+                            <span className="text-xs text-gray-400">—</span>
+                          )}
                         </td>
                         <td className="py-3 px-4 text-center">
                           {location && isRecent ? (
@@ -722,6 +1053,26 @@ export default function AuditPage() {
                             ? `${Math.round((rider.completed / rider.total_assigned) * 100)}%`
                             : '—'}
                         </td>
+                        <td className="py-3 px-4 text-center">
+                          {rider.has_optimized_route && rider.rider_user_id ? (
+                            <button
+                              onClick={() => {
+                                setSelectedRiderForMap(rider);
+                                fetchRouteMap(rider.rider_user_id, rider.rider_name);
+                              }}
+                              disabled={loadingRouteMap}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-xs font-medium disabled:opacity-50"
+                              title="View optimized route on map"
+                            >
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+                              </svg>
+                              View Map
+                            </button>
+                          ) : (
+                            <span className="text-xs text-gray-400">—</span>
+                          )}
+                        </td>
                       </tr>
                     );
                   })}
@@ -731,7 +1082,8 @@ export default function AuditPage() {
           </div>
         )}
 
-        {/* Filters */}
+        {/* Filters - Hidden */}
+        {false && (
         <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-6 mb-6">
           <h2 className="text-lg font-semibold text-gray-900 mb-4">Filters</h2>
           
@@ -913,6 +1265,7 @@ export default function AuditPage() {
             </div>
           </div>
         </div>
+        )}
 
         {/* Orders Table */}
         <div className="bg-white rounded-2xl shadow-lg border border-gray-100 overflow-hidden">
@@ -1285,11 +1638,13 @@ export default function AuditPage() {
                   </div>
                 )}
 
-                {selectedOrder.delivery_notes && (
+                {(selectedOrder.delivery_notes || selectedOrder.cancellation_reason) && (
                   <div className="mb-6">
                     <h4 className="text-sm font-semibold text-gray-700 mb-2">Delivery Notes</h4>
                     <div className="bg-gray-50 p-3 rounded">
-                      <p className="text-sm">{selectedOrder.delivery_notes}</p>
+                        <p className="text-sm whitespace-pre-line">
+                          {selectedOrder.delivery_notes || selectedOrder.cancellation_reason}
+                        </p>
                     </div>
                   </div>
                 )}
@@ -1310,6 +1665,7 @@ export default function AuditPage() {
                         {orderTimeline.map((event, index) => {
                           // Determine icon and color based on event type
                           const getEventStyle = (eventName: string) => {
+                            if (eventName.includes('Cancelled')) return { icon: '✖', color: 'bg-red-500', ring: 'ring-red-100' };
                             if (eventName.includes('Assigned')) return { icon: '👤', color: 'bg-blue-500', ring: 'ring-blue-100' };
                             if (eventName.includes('Accepted')) return { icon: '✓', color: 'bg-green-500', ring: 'ring-green-100' };
                             if (eventName.includes('Started') || eventName.includes('Transit')) return { icon: '🚚', color: 'bg-yellow-500', ring: 'ring-yellow-100' };
@@ -1395,6 +1751,14 @@ export default function AuditPage() {
                                           )}
                                         </div>
                                       )}
+                                        {event.details.reason && (
+                                          <div className="mt-3">
+                                            <span className="block text-xs font-semibold text-gray-600 uppercase tracking-wide">Reason</span>
+                                            <p className="mt-1 text-sm text-gray-900 whitespace-pre-line">
+                                              {String(event.details.reason)}
+                                            </p>
+                                          </div>
+                                        )}
                                       <div className="space-y-2">
                                         {Object.entries(event.details).map(([key, value]) => {
                                           // Format specific fields nicely
@@ -1428,6 +1792,9 @@ export default function AuditPage() {
                                           if (event.event === 'Payment Confirmed' && ['amount','payment_method','upi_transaction_id','gateway_payment_id','gateway_order_id'].includes(key)) {
                                             return null;
                                           }
+                                          if (key === 'reason') {
+                                            return null;
+                                          }
                                           if (key === 'payment') {
                                             const payment = value as any;
                                             return (
@@ -1455,7 +1822,7 @@ export default function AuditPage() {
                                               <span className="text-xs font-medium text-gray-600 min-w-[120px]">
                                                 {key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:
                                               </span>
-                                              <span className="text-xs text-gray-700">{JSON.stringify(value)}</span>
+                                              <span className="text-xs text-gray-700 whitespace-pre-wrap">{typeof value === 'string' || typeof value === 'number' ? String(value) : JSON.stringify(value)}</span>
                                             </div>
                                           );
                                         })}
@@ -1715,7 +2082,80 @@ export default function AuditPage() {
             </div>
           </div>
         )}
-      </div>
+
+        {/* Route Map Modal */}
+        {showRouteMapModal && routeMapData && selectedRiderForMap && (
+          <div 
+            className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4"
+            onClick={() => setShowRouteMapModal(false)}
+          >
+            <div 
+              className="relative w-full max-w-6xl max-h-[90vh] bg-white rounded-lg shadow-2xl overflow-hidden flex flex-col"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-6 py-4 flex items-center justify-between">
+                <div>
+                  <h3 className="text-xl font-bold">Optimized Route Map</h3>
+                  <p className="text-sm text-blue-100 mt-1">
+                    {selectedRiderForMap.rider_name} • {routeMapData.total_deliveries} deliveries
+                  </p>
+                </div>
+                <button
+                  onClick={() => setShowRouteMapModal(false)}
+                  className="text-white hover:bg-white hover:bg-opacity-20 rounded-lg p-2 transition-colors"
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-hidden">
+                {routeMapData.status === 'success' && routeMapData.deliveries.length > 0 ? (
+                  <RouteMapView 
+                    pickupLocation={routeMapData.pickup_location}
+                    deliveries={routeMapData.deliveries}
+                  />
+                ) : (
+                  <div className="flex items-center justify-center h-full p-8">
+                    <div className="text-center">
+                      <svg className="w-16 h-16 mx-auto text-gray-400 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+                      </svg>
+                      <p className="text-lg font-medium text-gray-900 mb-2">No Route Data</p>
+                      <p className="text-sm text-gray-600">{routeMapData.message || 'No optimized route found for this rider'}</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="bg-gray-50 px-6 py-4 border-t border-gray-200">
+                <div className="flex items-center justify-between text-sm">
+                  <div className="flex items-center gap-6">
+                    <div className="flex items-center gap-2">
+                      <div className="w-4 h-4 bg-green-500 rounded-full border-2 border-white shadow"></div>
+                      <span className="text-gray-700">Pickup Location</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="w-4 h-4 bg-blue-500 rounded-full border-2 border-white shadow"></div>
+                      <span className="text-gray-700">Delivery Points</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="h-0.5 w-8 bg-blue-600"></div>
+                      <span className="text-gray-700">Optimized Route</span>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setShowRouteMapModal(false)}
+                    className="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-800 rounded-lg transition-colors font-medium"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}      </div>
     </div>
   );
 }

@@ -52,14 +52,18 @@ def get_current_user(authorization: Optional[str] = Header(None)) -> CurrentPrin
 async def get_current_principal_ws(token: str) -> Optional[CurrentPrincipal]:
     """Validate WebSocket token"""
     if not token:
+        print("[WebSocket Auth] No token provided")
         return None
     try:
         payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALG])
         sub = payload.get("sub")
         org_id = payload.get("org_id")
         role = payload.get("role")
+        print(f"[WebSocket Auth] Token decoded: sub={sub}, org_id={org_id}, role={role}")
         if not sub or not org_id:
+            print(f"[WebSocket Auth] Missing required fields: sub={bool(sub)}, org_id={bool(org_id)}")
             return None
         return CurrentPrincipal(user_id=sub, org_id=org_id, role=role)
-    except JWTError:
+    except JWTError as e:
+        print(f"[WebSocket Auth] JWT decode error: {e}")
         return None

@@ -1,20 +1,35 @@
 package com.digitalchain.rider.data
 
+import com.digitalchain.rider.BuildConfig
+import com.digitalchain.rider.RiderApp
+import com.digitalchain.rider.data.api.*
+import com.digitalchain.rider.data.local.AppDatabase
+import com.digitalchain.rider.data.local.PendingActionEntity
+import com.digitalchain.rider.data.model.*
+import com.squareup.moshi.JsonClass
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
-import com.digitalchain.rider.BuildConfig
-import com.digitalchain.rider.data.api.*
-import com.digitalchain.rider.data.model.*
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.RequestBody.Companion.asRequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
-import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import retrofit2.HttpException
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
+import java.io.File
+import java.io.IOException
 import java.time.Instant
 
 class Repository {
+    private val moshi: Moshi by lazy {
+        Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
+    }
+
     private val api: ApiService by lazy {
         val logger = HttpLoggingInterceptor().apply { level = HttpLoggingInterceptor.Level.BODY }
         val auth = okhttp3.Interceptor { chain ->
@@ -30,7 +45,6 @@ class Repository {
             .addInterceptor(logger)
             .cache(null)  // Disable caching
             .build()
-        val moshi = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
         val retrofit = Retrofit.Builder()
             .baseUrl(BuildConfig.BASE_URL)
             .addConverterFactory(MoshiConverterFactory.create(moshi))
@@ -38,6 +52,14 @@ class Repository {
             .build()
         retrofit.create(ApiService::class.java)
     }
+
+    private val database by lazy { AppDatabase.getDatabase(RiderApp.appContext) }
+    private val pendingDao by lazy { database.pendingActionDao() }
+    private val queueMutex = Mutex()
+
+    private val statusPayloadAdapter by lazy { moshi.adapter(StatusUpdatePayload::class.java) }
+    private val podPayloadAdapter by lazy { moshi.adapter(PodSubmissionPayload::class.java) }
+    private val podImagePayloadAdapter by lazy { moshi.adapter(PodImagePayload::class.java) }
 
     suspend fun resolveOrgId(email: String): Result<String> = withContext(Dispatchers.IO) {
         val normalized = email.trim().lowercase()
@@ -93,11 +115,15 @@ class Repository {
             deliveriesResp?.items?.forEach { dto ->
                 allDeliveries.add(dto.toModel())
             }
-            
+
             assignedResp?.orders?.forEach { dto ->
-                // Only add if not already present (by orderId)
-                if (allDeliveries.none { it.orderId == dto.invoice_no }) {
-                    allDeliveries.add(dto.toModel())
+                val mapped = dto.toModel()
+                // If already present from /deliveries, replace it with richer assigned-orders data
+                val existingIndex = allDeliveries.indexOfFirst { it.orderId == mapped.orderId }
+                if (existingIndex >= 0) {
+                    allDeliveries[existingIndex] = mapped
+                } else {
+                    allDeliveries.add(mapped)
                 }
             }
             
@@ -128,23 +154,45 @@ class Repository {
     }
 
     suspend fun updateStatus(id: String, status: String, note: String?): Result<Unit> = withContext(Dispatchers.IO) {
+        val timestamp = Instant.now().toString()
+        flushPendingActions()
         return@withContext try {
-            val now = Instant.now().toString()
-            api.updateStatus(id, StatusUpdateRequest(status = status, timestamp = now, note = note))
+            api.updateStatus(id, StatusUpdateRequest(status = status, timestamp = timestamp, note = note))
+            flushPendingActions()
             Result.success(Unit)
+        } catch (io: IOException) {
+            enqueueStatusUpdate(StatusUpdatePayload(id, status, note, timestamp))
+            Result.failure(OfflineQueueException("Status update queued; will sync when online"))
+        } catch (http: HttpException) {
+            if (http.code() in 500..599) {
+                enqueueStatusUpdate(StatusUpdatePayload(id, status, note, timestamp))
+                Result.failure(OfflineQueueException("Status update queued; will sync when online"))
+            } else {
+                Result.failure(http)
+            }
         } catch (t: Throwable) {
-            // TODO: queue offline if needed
             Result.failure(t)
         }
     }
 
     suspend fun uploadPod(id: String, recipientName: String, note: String?): Result<Unit> = withContext(Dispatchers.IO) {
+        val timestamp = Instant.now().toString()
+        flushPendingActions()
         return@withContext try {
-            val now = Instant.now().toString()
-            api.uploadPod(id, PodRequest(recipient_name = recipientName, note = note, timestamp = now))
+            api.uploadPod(id, PodRequest(recipient_name = recipientName, note = note, timestamp = timestamp))
+            flushPendingActions()
             Result.success(Unit)
+        } catch (io: IOException) {
+            enqueuePodSubmission(PodSubmissionPayload(id, recipientName, note, timestamp))
+            Result.failure(OfflineQueueException("Proof of delivery queued; will sync when online"))
+        } catch (http: HttpException) {
+            if (http.code() in 500..599) {
+                enqueuePodSubmission(PodSubmissionPayload(id, recipientName, note, timestamp))
+                Result.failure(OfflineQueueException("Proof of delivery queued; will sync when online"))
+            } else {
+                Result.failure(http)
+            }
         } catch (t: Throwable) {
-            // TODO: queue offline if needed
             Result.failure(t)
         }
     }
@@ -207,24 +255,44 @@ class Repository {
             Result.failure(t)
         }
     }
+
+    suspend fun cancelDelivery(invoiceId: String, reason: String): Result<Unit> = withContext(Dispatchers.IO) {
+        return@withContext try {
+            val request = CancelDeliveryRequest(
+                invoice_id = invoiceId,
+                reason = reason
+            )
+            api.cancelDelivery(request)
+            Result.success(Unit)
+        } catch (t: Throwable) {
+            Result.failure(t)
+        }
+    }
     
     suspend fun uploadPodImage(
         invoiceId: String,
         imageBytes: ByteArray,
         fileName: String = "pod_image.jpg"
     ): Result<String> = withContext(Dispatchers.IO) {
+        flushPendingActions()
         return@withContext try {
-            val requestBody = okhttp3.RequestBody.create(
-                "image/jpeg".toMediaTypeOrNull(),
-                imageBytes
-            )
+            val requestBody = imageBytes.toRequestBody("image/jpeg".toMediaTypeOrNull())
             val part = okhttp3.MultipartBody.Part.createFormData(
                 "file",
                 fileName,
                 requestBody
             )
             val response = api.uploadPodImage(invoiceId, part)
+            flushPendingActions()
             Result.success(response.image_url)
+        } catch (io: IOException) {
+            return@withContext queuePodImageOffline(invoiceId, fileName, imageBytes, "image/jpeg")
+        } catch (http: HttpException) {
+            if (http.code() in 500..599) {
+                return@withContext queuePodImageOffline(invoiceId, fileName, imageBytes, "image/jpeg")
+            } else {
+                Result.failure(http)
+            }
         } catch (t: Throwable) {
             Result.failure(t)
         }
@@ -323,6 +391,192 @@ class Repository {
         }
     }
 
+    private suspend fun flushPendingActions(limit: Int = 25) {
+        val pending = queueMutex.withLock { pendingDao.loadPending(limit) }
+        if (pending.isEmpty()) return
+
+        for (action in pending) {
+            when (processPendingAction(action)) {
+                ActionProcessResult.SUCCESS -> queueMutex.withLock { pendingDao.delete(action.id) }
+                ActionProcessResult.DROP -> queueMutex.withLock { pendingDao.delete(action.id) }
+                ActionProcessResult.RETRY_LATER -> {
+                    queueMutex.withLock {
+                        pendingDao.recordAttempt(action.id, System.currentTimeMillis())
+                    }
+                    break
+                }
+            }
+        }
+
+        queueMutex.withLock { pendingDao.dropFailed(MAX_QUEUE_ATTEMPTS) }
+    }
+
+    private suspend fun processPendingAction(action: PendingActionEntity): ActionProcessResult {
+        val type = runCatching { PendingActionType.valueOf(action.actionType) }.getOrElse {
+            return ActionProcessResult.DROP
+        }
+
+        return try {
+            when (type) {
+                PendingActionType.STATUS_UPDATE -> {
+                    val payload = statusPayloadAdapter.fromJson(action.payload) ?: return ActionProcessResult.DROP
+                    api.updateStatus(
+                        payload.deliveryId,
+                        StatusUpdateRequest(
+                            status = payload.status,
+                            timestamp = payload.timestamp,
+                            note = payload.note
+                        )
+                    )
+                    ActionProcessResult.SUCCESS
+                }
+
+                PendingActionType.POD_SUBMIT -> {
+                    val payload = podPayloadAdapter.fromJson(action.payload) ?: return ActionProcessResult.DROP
+                    api.uploadPod(
+                        payload.deliveryId,
+                        PodRequest(
+                            recipient_name = payload.recipientName,
+                            note = payload.note,
+                            timestamp = payload.timestamp
+                        )
+                    )
+                    ActionProcessResult.SUCCESS
+                }
+
+                PendingActionType.POD_IMAGE -> {
+                    val payload = podImagePayloadAdapter.fromJson(action.payload) ?: return ActionProcessResult.DROP
+                    val file = File(payload.filePath)
+                    if (!file.exists()) {
+                        return ActionProcessResult.DROP
+                    }
+                    val requestBody = file.asRequestBody(payload.mimeType.toMediaTypeOrNull())
+                    val part = okhttp3.MultipartBody.Part.createFormData("file", payload.fileName, requestBody)
+                    api.uploadPodImage(payload.deliveryId, part)
+                    file.delete()
+                    ActionProcessResult.SUCCESS
+                }
+            }
+        } catch (io: IOException) {
+            ActionProcessResult.RETRY_LATER
+        } catch (http: HttpException) {
+            if (http.code() in 500..599) ActionProcessResult.RETRY_LATER else ActionProcessResult.DROP
+        } catch (t: Throwable) {
+            ActionProcessResult.DROP
+        }
+    }
+
+    private suspend fun enqueueStatusUpdate(payload: StatusUpdatePayload) {
+        queueMutex.withLock {
+            pendingDao.insert(
+                PendingActionEntity(
+                    actionType = PendingActionType.STATUS_UPDATE.name,
+                    targetId = payload.deliveryId,
+                    payload = statusPayloadAdapter.toJson(payload)
+                )
+            )
+        }
+    }
+
+    private suspend fun enqueuePodSubmission(payload: PodSubmissionPayload) {
+        queueMutex.withLock {
+            pendingDao.insert(
+                PendingActionEntity(
+                    actionType = PendingActionType.POD_SUBMIT.name,
+                    targetId = payload.deliveryId,
+                    payload = podPayloadAdapter.toJson(payload)
+                )
+            )
+        }
+    }
+
+    private suspend fun enqueuePodImage(payload: PodImagePayload) {
+        queueMutex.withLock {
+            pendingDao.insert(
+                PendingActionEntity(
+                    actionType = PendingActionType.POD_IMAGE.name,
+                    targetId = payload.deliveryId,
+                    payload = podImagePayloadAdapter.toJson(payload)
+                )
+            )
+        }
+    }
+
+    private suspend fun queuePodImageOffline(
+        invoiceId: String,
+        fileName: String,
+        bytes: ByteArray,
+        mimeType: String
+    ): Result<String> {
+        return try {
+            val payload = persistImageForOffline(invoiceId, fileName, bytes, mimeType)
+            enqueuePodImage(payload)
+            Result.failure(OfflineQueueException("POD image queued; will upload when online"))
+        } catch (error: Throwable) {
+            Result.failure(error)
+        }
+    }
+
+    private fun persistImageForOffline(
+        invoiceId: String,
+        fileName: String,
+        bytes: ByteArray,
+        mimeType: String
+    ): PodImagePayload {
+        val cacheDir = File(RiderApp.appContext.cacheDir, "pod_queue")
+        if (!cacheDir.exists() && !cacheDir.mkdirs()) {
+            throw IOException("Unable to prepare cache directory for offline POD")
+        }
+        val offlineFile = File(cacheDir, "${invoiceId}_${System.currentTimeMillis()}_$fileName")
+        offlineFile.writeBytes(bytes)
+        return PodImagePayload(
+            deliveryId = invoiceId,
+            filePath = offlineFile.absolutePath,
+            fileName = offlineFile.name,
+            mimeType = mimeType
+        )
+    }
+
+    private enum class ActionProcessResult {
+        SUCCESS,
+        RETRY_LATER,
+        DROP
+    }
+
+    private enum class PendingActionType {
+        STATUS_UPDATE,
+        POD_SUBMIT,
+        POD_IMAGE
+    }
+
+    @JsonClass(generateAdapter = true)
+    data class StatusUpdatePayload(
+        val deliveryId: String,
+        val status: String,
+        val note: String?,
+        val timestamp: String
+    )
+
+    @JsonClass(generateAdapter = true)
+    data class PodSubmissionPayload(
+        val deliveryId: String,
+        val recipientName: String,
+        val note: String?,
+        val timestamp: String
+    )
+
+    @JsonClass(generateAdapter = true)
+    data class PodImagePayload(
+        val deliveryId: String,
+        val filePath: String,
+        val fileName: String,
+        val mimeType: String
+    )
+
+    companion object {
+        private const val MAX_QUEUE_ATTEMPTS = 6
+    }
+
     private fun DeliveryDto.toModel(): com.digitalchain.rider.data.model.Delivery {
     val lat = when (latitude) {
         is Double -> latitude
@@ -345,7 +599,8 @@ class Repository {
         latitude = lat ?: geo?.lat,
         longitude = lng ?: geo?.lng,
         customerPhone = customer_phone,
-        amount = amount
+        amount = amount,
+        routeSequence = null  // Not available in this endpoint
     )
     }
 
@@ -365,13 +620,14 @@ class Repository {
         deliveryId = invoice_id,
         orderId = invoice_no,
         customer = customer_name,
-        address = shipping_address ?: customer_address,  // Use shipping_address if available, otherwise customer_address
+        address = delivery_address ?: shipping_address ?: customer_address,  // Use delivery_address (final), then shipping, then billing
         status = status,
         riderStatus = rider_status,
         latitude = lat,
         longitude = lng,
         customerPhone = customer_phone,
-        amount = amount
+        amount = amount,
+        routeSequence = route_sequence  // Optimized sequence from backend
     )
     }
 

@@ -9,6 +9,7 @@ import android.graphics.ImageDecoder
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
+import androidx.compose.ui.layout.ContentScale
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
@@ -49,8 +50,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import android.util.Base64
 import com.digitalchain.rider.data.DeliveryCache
+import com.digitalchain.rider.data.OfflineQueueException
 import com.digitalchain.rider.service.LocationTrackingService
 import com.google.android.gms.location.LocationServices
 import com.digitalchain.rider.data.Repository
@@ -62,6 +65,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
+import java.io.File
 
 // Helper function for image compression
 fun compressImage(bitmap: Bitmap): Bitmap {
@@ -111,9 +115,6 @@ fun DeliveryDetailScreen(
     var loading by remember { mutableStateOf(true) }
     var riderStatus by remember { mutableStateOf("") }
     var location by remember { mutableStateOf<Pair<Double, Double>?>(DeliveryCache.getCapturedLocation(deliveryId)) }
-    var manualLat by remember { mutableStateOf("") }
-    var manualLng by remember { mutableStateOf("") }
-    var showManualEntry by remember { mutableStateOf(false) }
     var locationLoading by remember { mutableStateOf(false) }
 
     var geocoding by remember { mutableStateOf(false) }
@@ -128,10 +129,13 @@ fun DeliveryDetailScreen(
     var paymentId by remember { mutableStateOf<String?>(null) }
     var upiString by remember { mutableStateOf("") }
     var qrGenerating by remember { mutableStateOf(false) }
-    var paymentStatus by remember { mutableStateOf<String?>(null) }
     var paymentCompleted by remember { mutableStateOf(false) }
     var transactionId by remember { mutableStateOf<String?>(null) }
     var paymentCompletedAt by remember { mutableStateOf<String?>(null) }
+
+    var showCancelDialog by remember { mutableStateOf(false) }
+    var cancelReason by remember { mutableStateOf("") }
+    var cancelling by remember { mutableStateOf(false) }
 
     var capturedImage by remember { mutableStateOf<Bitmap?>(null) }
     var hasCameraPermission by remember {
@@ -144,11 +148,41 @@ fun DeliveryDetailScreen(
     var estimatedMinutes by remember { mutableStateOf("30") }
     var estimatedDistance by remember { mutableStateOf("") }
     var calculatingEstimate by remember { mutableStateOf(false) }
-    
-    val cameraLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.TakePicturePreview()
-    ) { bitmap ->
-        bitmap?.let { capturedImage = compressImage(it) }
+
+    var capturedUri by remember { mutableStateOf<Uri?>(null) }
+
+    val takePictureLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.TakePicture()
+    ) { success ->
+        if (success) {
+            capturedUri?.let { uri ->
+                runCatching {
+                    val bitmap = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                        val source = ImageDecoder.createSource(ctx.contentResolver, uri)
+                        ImageDecoder.decodeBitmap(source)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        MediaStore.Images.Media.getBitmap(ctx.contentResolver, uri)
+                    }
+                    capturedImage = compressImage(bitmap)
+                }.onFailure { error ->
+                    scope.launch { snackbarHostState.showSnackbar(error.message ?: "Unable to load photo") }
+                }
+            }
+        }
+    }
+
+    val captureWithCamera = remember(ctx, snackbarHostState) {
+        {
+            runCatching {
+                val photoFile = File.createTempFile("pod_capture_", ".jpg", ctx.cacheDir)
+                val uri = FileProvider.getUriForFile(ctx, ctx.packageName + ".fileprovider", photoFile)
+                capturedUri = uri
+                takePictureLauncher.launch(uri)
+            }.onFailure { error ->
+                scope.launch { snackbarHostState.showSnackbar(error.message ?: "Unable to open camera") }
+            }
+        }
     }
     val galleryLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
@@ -175,7 +209,7 @@ fun DeliveryDetailScreen(
     ) { granted ->
         hasCameraPermission = granted
         if (granted) {
-            cameraLauncher.launch(null)
+            captureWithCamera()
         }
     }
 
@@ -186,30 +220,12 @@ fun DeliveryDetailScreen(
         }
     }
 
-    val locationPermissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        if (granted) {
-            scope.launch {
-                locationLoading = true
-                try {
-                    val fusedLocationClient = LocationServices.getFusedLocationProviderClient(ctx)
-                    val loc = fusedLocationClient.lastLocation.await()
-                    loc?.let { persistLocation(Pair(it.latitude, it.longitude)) }
-                } catch (e: Exception) {
-                    showManualEntry = true
-                } finally {
-                    locationLoading = false
-                }
-            }
-        } else {
-            showManualEntry = true
-        }
-    }
-
     // Load delivery details
     LaunchedEffect(deliveryId) {
         loading = true
+        showCancelDialog = false
+        cancelReason = ""
+        cancelling = false
         val result = repo.getDeliveries()
         result.getOrNull()?.find { it.deliveryId == deliveryId }?.let { del ->
             delivery = del
@@ -239,10 +255,12 @@ fun DeliveryDetailScreen(
             return@produceState
         }
 
-        if (del.latitude != null && del.longitude != null) {
-            value = Pair(del.latitude!!, del.longitude!!)
-            navError = null
-            return@produceState
+        del.latitude?.let { lat ->
+            del.longitude?.let { lng ->
+                value = Pair(lat, lng)
+                navError = null
+                return@produceState
+            }
         }
 
         if (del.address.isBlank()) {
@@ -267,6 +285,7 @@ fun DeliveryDetailScreen(
 
     val statusColor = remember(riderStatus) {
         when {
+            riderStatus.contains("cancel", true) -> Color(0xFFFF3B30)
             riderStatus.contains("delivered", true) || riderStatus.contains("completed", true) -> Color(0xFF34C759)
             riderStatus.contains("transit", true) -> Color(0xFF007AFF)
             riderStatus.contains("accepted", true) -> Color(0xFFFF9500)
@@ -275,6 +294,7 @@ fun DeliveryDetailScreen(
     }
     val statusIconVector = remember(riderStatus) {
         when {
+            riderStatus.contains("cancel", true) -> Icons.Outlined.WarningAmber
             riderStatus.contains("delivered", true) || riderStatus.contains("completed", true) -> Icons.Outlined.CheckCircle
             riderStatus.contains("transit", true) -> Icons.Outlined.LocalShipping
             riderStatus.contains("accepted", true) -> Icons.Outlined.PendingActions
@@ -344,7 +364,10 @@ fun DeliveryDetailScreen(
                     }
                 }
             } else {
-                val currentDelivery = delivery!!
+                val currentDelivery = delivery ?: return@Scaffold
+                val canCancelOrder = !riderStatus.contains("delivered", true) &&
+                    !riderStatus.contains("completed", true) &&
+                    !riderStatus.contains("cancel", true)
                 Column(
                     Modifier
                         .fillMaxSize()
@@ -372,34 +395,98 @@ fun DeliveryDetailScreen(
                         invoiceAmount = currentDelivery.amount
                     )
 
-                    // Debug Info
-                    Card(
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.1f)),
-                        modifier = Modifier.fillMaxWidth()
+                    AnimatedVisibility(
+                        visible = canCancelOrder,
+                        enter = fadeIn() + expandVertically(),
+                        exit = fadeOut() + shrinkVertically()
                     ) {
-                        Column(Modifier.padding(8.dp)) {
-                            Text("DEBUG INFO:", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelSmall)
-                            Text("Lat: ${currentDelivery.latitude}", style = MaterialTheme.typography.bodySmall)
-                            Text("Lng: ${currentDelivery.longitude}", style = MaterialTheme.typography.bodySmall)
-                            Text("ID: ${currentDelivery.deliveryId}", style = MaterialTheme.typography.bodySmall)
-                            
-                            Button(
-                                onClick = { 
-                                    scope.launch {
-                                        loading = true
-                                        val result = repo.getDeliveries()
-                                        result.getOrNull()?.find { it.deliveryId == deliveryId }?.let { del ->
-                                            delivery = del
-                                            riderStatus = del.riderStatus
-                                            android.util.Log.d("DeliveryDetail", "Refreshed: lat=${del.latitude}")
-                                        }
-                                        loading = false
-                                    }
-                                },
-                                modifier = Modifier.padding(top = 4.dp),
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF1F2)),
+                            border = BorderStroke(1.dp, Color(0xFFFFCDD2))
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
-                                Text("Force Refresh", fontSize = 10.sp)
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(44.dp)
+                                            .clip(CircleShape)
+                                            .background(Color(0xFFFFDAD6)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Outlined.WarningAmber,
+                                            contentDescription = null,
+                                            tint = Color(0xFFB3261E)
+                                        )
+                                    }
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            "Need to cancel this delivery?",
+                                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                                            color = Color(0xFFB3261E)
+                                        )
+                                        Text(
+                                            "Share a reason so operations and support are notified.",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = Color(0xFF7F1D1D)
+                                        )
+                                    }
+                                }
+                                OutlinedTextField(
+                                    value = cancelReason,
+                                    onValueChange = { updated -> if (updated.length <= 250) cancelReason = updated },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    enabled = !cancelling,
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = textFieldColors,
+                                    label = { Text("Cancellation reason") },
+                                    placeholder = { Text("Example: Customer rescheduled, address closed") },
+                                    minLines = 3,
+                                    maxLines = 4,
+                                    supportingText = {
+                                        val remaining = (250 - cancelReason.length).coerceAtLeast(0)
+                                        Text(
+                                            text = "Minimum 3 characters • $remaining left",
+                                            color = Color(0xFF7F1D1D)
+                                        )
+                                    }
+                                )
+                                Button(
+                                    onClick = { showCancelDialog = true },
+                                    modifier = Modifier.fillMaxWidth().height(52.dp),
+                                    enabled = cancelReason.trim().length >= 3 && !cancelling,
+                                    shape = RoundedCornerShape(14.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = Color(0xFFB3261E),
+                                        contentColor = Color.White
+                                    )
+                                ) {
+                                    if (cancelling) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(22.dp),
+                                            color = Color.White,
+                                            strokeWidth = 2.5.dp
+                                        )
+                                        Spacer(Modifier.width(12.dp))
+                                        Text("Cancelling...")
+                                    } else {
+                                        Text(
+                                            "Cancel Delivery",
+                                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold)
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -446,7 +533,7 @@ fun DeliveryDetailScreen(
                                 )
                                 Spacer(Modifier.height(4.dp))
                                 Text(
-                                    delivery!!.address,
+                                    currentDelivery.address,
                                     style = MaterialTheme.typography.bodyMedium.copy(
                                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
                                     )
@@ -455,27 +542,42 @@ fun DeliveryDetailScreen(
                                 // Show coordinates if available
                                 val finalLat = navCoords?.first
                                 val finalLng = navCoords?.second
-                                
+
                                 if (finalLat != null && finalLng != null) {
-                                    Spacer(Modifier.height(4.dp))
-                                    Row(
-                                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                        verticalAlignment = Alignment.CenterVertically
+                                    Spacer(Modifier.height(8.dp))
+                                    Surface(
+                                        color = Color(0xFF007AFF).copy(alpha = 0.08f),
+                                        shape = RoundedCornerShape(12.dp)
                                     ) {
-                                        Text(
-                                            "$finalLat, $finalLng",
-                                            style = MaterialTheme.typography.bodySmall.copy(
-                                                color = Color(0xFF007AFF),
-                                                fontWeight = FontWeight.Medium
-                                            )
-                                        )
-                                        if (usedGeocodedCoords) {
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
                                             Icon(
-                                                imageVector = Icons.Outlined.LocationOn,
+                                                imageVector = Icons.Outlined.Navigation,
                                                 contentDescription = null,
-                                                tint = Color(0xFF007AFF),
-                                                modifier = Modifier.size(14.dp)
+                                                tint = Color(0xFF007AFF)
                                             )
+                                            Column {
+                                                Text(
+                                                    "Navigation ready",
+                                                    style = MaterialTheme.typography.bodyMedium.copy(
+                                                        fontWeight = FontWeight.SemiBold,
+                                                        color = Color(0xFF0B3D91)
+                                                    )
+                                                )
+                                                if (usedGeocodedCoords) {
+                                                    Text(
+                                                        "Address matched with map lookup",
+                                                        style = MaterialTheme.typography.bodySmall.copy(
+                                                            color = Color(0xFF0B3D91).copy(alpha = 0.75f)
+                                                        )
+                                                    )
+                                                }
+                                            }
                                         }
                                     }
                                 } else if (geocoding) {
@@ -596,36 +698,7 @@ fun DeliveryDetailScreen(
                     enter = fadeIn() + expandVertically(),
                     exit = fadeOut() + shrinkVertically()
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        FilledTonalButton(
-                            onClick = {
-                                scope.launch {
-                                    val result = repo.rejectOrder(currentDelivery.orderId)
-                                    result.fold(
-                                        onSuccess = {
-                                            onStatusChanged()
-                                            snackbarHostState.showSnackbar("Order rejected")
-                                            onBack()
-                                        },
-                                        onFailure = {
-                                            snackbarHostState.showSnackbar(it.message ?: "Unable to reject order")
-                                        }
-                                    )
-                                }
-                            },
-                            modifier = Modifier.weight(1f).height(56.dp),
-                            shape = RoundedCornerShape(16.dp),
-                            colors = ButtonDefaults.filledTonalButtonColors(
-                                containerColor = Color(0xFFFF3B30).copy(alpha = 0.15f),
-                                contentColor = Color(0xFFFF3B30)
-                            )
-                        ) {
-                            Text("Reject", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold))
-                        }
-                        Button(
+                    Button(
                             onClick = {
                                 // Get current location and calculate estimate
                                 scope.launch {
@@ -656,20 +729,27 @@ fun DeliveryDetailScreen(
                                         // Debug log
                                         android.util.Log.d("DeliveryDetail", "Checking coordinates: lat=${currentDelivery.latitude}, lng=${currentDelivery.longitude}")
                                         
-                                        if (currentDelivery.latitude == null || currentDelivery.longitude == null) {
+                                        // Calculate estimated time
+                                        val destLat = currentDelivery.latitude ?: run {
                                             snackbarHostState.showSnackbar("Delivery location not available")
                                             estimatedMinutes = "30"
                                             calculatingEstimate = false
                                             showEstimateDialog = true
                                             return@launch
                                         }
-                                        
-                                        // Calculate estimated time
+                                        val destLng = currentDelivery.longitude ?: run {
+                                            snackbarHostState.showSnackbar("Delivery location not available")
+                                            estimatedMinutes = "30"
+                                            calculatingEstimate = false
+                                            showEstimateDialog = true
+                                            return@launch
+                                        }
+
                                         val result = repo.getEstimatedDeliveryTime(
                                             currentLoc.latitude,
                                             currentLoc.longitude,
-                                            currentDelivery.latitude!!,
-                                            currentDelivery.longitude!!
+                                            destLat,
+                                            destLng
                                         )
                                         result.fold(
                                             onSuccess = { (minutes, distance) ->
@@ -694,12 +774,11 @@ fun DeliveryDetailScreen(
                                     }
                                 }
                             },
-                            modifier = Modifier.weight(1f).height(56.dp),
+                            modifier = Modifier.fillMaxWidth().height(56.dp),
                             shape = RoundedCornerShape(16.dp)
                         ) {
                             Text("Accept Order", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold))
                         }
-                    }
                 }
                 
                 // Location Section (for accepted and in_transit orders)
@@ -831,7 +910,7 @@ fun DeliveryDetailScreen(
                                                 locationLoading = false
                                             }
                                             
-                                            val result = repo.startDelivery(currentDelivery.orderId, coords)
+                                            val result = repo.startDelivery(currentDelivery.deliveryId, coords)
                                             result.fold(
                                                 onSuccess = {
                                                     riderStatus = "in_transit"
@@ -1112,7 +1191,7 @@ fun DeliveryDetailScreen(
                             OutlinedButton(
                                 onClick = {
                                     if (hasCameraPermission) {
-                                        cameraLauncher.launch(null)
+                                        captureWithCamera()
                                     } else {
                                         cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
                                     }
@@ -1153,14 +1232,15 @@ fun DeliveryDetailScreen(
                                 Card(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .heightIn(min = 180.dp),
+                                        .height(220.dp),
                                     shape = RoundedCornerShape(16.dp)
                                 ) {
                                     Image(
                                         bitmap = bitmap.asImageBitmap(),
                                         contentDescription = "Proof attachment",
-                                        modifier = Modifier.fillMaxWidth(),
-                                        alignment = Alignment.Center
+                                        modifier = Modifier.fillMaxSize(),
+                                        alignment = Alignment.Center,
+                                        contentScale = androidx.compose.ui.layout.ContentScale.Crop
                                     )
                                 }
                             }
@@ -1199,17 +1279,21 @@ fun DeliveryDetailScreen(
                                             val stream = java.io.ByteArrayOutputStream()
                                             bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 85, stream)
                                             val imageBytes = stream.toByteArray()
-                                            
-                                            val uploadResult = repo.uploadPodImage(currentDelivery.orderId, imageBytes, "pod_${currentDelivery.orderId}.jpg")
-                                            uploadResult.fold(
-                                                onSuccess = { imageUrl ->
-                                                    // Image uploaded successfully
-                                                },
-                                                onFailure = {
-                                                    snackbarHostState.showSnackbar("Failed to upload POD image: ${it.message}")
+
+                                            val uploadResult = repo.uploadPodImage(
+                                                currentDelivery.deliveryId,
+                                                imageBytes,
+                                                "pod_${currentDelivery.orderId}.jpg"
+                                            )
+                                            val imageError = uploadResult.exceptionOrNull()
+                                            if (imageError != null) {
+                                                if (imageError is OfflineQueueException) {
+                                                    snackbarHostState.showSnackbar(imageError.message ?: "Proof image queued for sync")
+                                                } else {
+                                                    snackbarHostState.showSnackbar("Failed to upload POD image: ${imageError.message}")
                                                     return@launch
                                                 }
-                                            )
+                                            }
                                         }
                                         
                                         val paymentData = when (paymentMethod) {
@@ -1218,7 +1302,7 @@ fun DeliveryDetailScreen(
                                             "card" -> mapOf("method" to "card", "card_last4" to cardLast4)
                                             else -> mapOf("method" to "cash")
                                         }
-                                        val result = repo.completeDelivery(currentDelivery.orderId, coords, paymentData)
+                                        val result = repo.completeDelivery(currentDelivery.deliveryId, coords, paymentData)
                                         result.fold(
                                             onSuccess = {
                                                 riderStatus = "delivered"
@@ -1302,6 +1386,104 @@ fun DeliveryDetailScreen(
         }
         
         // Estimated Time Dialog - place inside the else block with delivery
+        if (showCancelDialog) {
+            delivery?.let { current ->
+                AlertDialog(
+                    onDismissRequest = {
+                        if (!cancelling) {
+                            showCancelDialog = false
+                        }
+                    },
+                    icon = {
+                        Icon(
+                            imageVector = Icons.Outlined.WarningAmber,
+                            contentDescription = null,
+                            tint = Color(0xFFB3261E)
+                        )
+                    },
+                    title = { Text("Confirm cancellation") },
+                    text = {
+                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Text(
+                                "This marks the delivery as cancelled and notifies operations.",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Surface(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(12.dp),
+                                color = Color(0xFFFFE8E8)
+                            ) {
+                                Text(
+                                    text = cancelReason.trim(),
+                                    modifier = Modifier.padding(12.dp),
+                                    style = MaterialTheme.typography.bodySmall.copy(color = Color(0xFF7F1D1D))
+                                )
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                scope.launch {
+                                    val reason = cancelReason.trim()
+                                    if (reason.length < 3) {
+                                        snackbarHostState.showSnackbar("Add a short reason before cancelling")
+                                        return@launch
+                                    }
+                                    val wasInTransit = riderStatus.contains("transit", true)
+                                    cancelling = true
+                                    try {
+                                        val result = repo.cancelDelivery(current.orderId, reason)
+                                        result.fold(
+                                            onSuccess = {
+                                                riderStatus = "cancelled"
+                                                delivery = current.copy(status = "cancelled", riderStatus = "cancelled")
+                                                if (wasInTransit) {
+                                                    LocationTrackingService.stopTracking(ctx)
+                                                }
+                                                snackbarHostState.showSnackbar("Delivery cancelled")
+                                                showCancelDialog = false
+                                                cancelReason = ""
+                                                onStatusChanged()
+                                            },
+                                            onFailure = { error ->
+                                                snackbarHostState.showSnackbar(error.message ?: "Unable to cancel order")
+                                            }
+                                        )
+                                    } finally {
+                                        cancelling = false
+                                    }
+                                }
+                            },
+                            enabled = !cancelling
+                        ) {
+                            if (cancelling) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    color = Color.White,
+                                    strokeWidth = 2.dp
+                                )
+                            } else {
+                                Text("Yes, cancel it")
+                            }
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(
+                            onClick = {
+                                if (!cancelling) {
+                                    showCancelDialog = false
+                                }
+                            },
+                            enabled = !cancelling
+                        ) {
+                            Text("Go back")
+                        }
+                    }
+                )
+            }
+        }
+
         if (showEstimateDialog) {
             AlertDialog(
                 onDismissRequest = { 
@@ -1371,7 +1553,11 @@ fun DeliveryDetailScreen(
                         onClick = {
                             scope.launch {
                                 val minutes = estimatedMinutes.toIntOrNull()
-                                val result = repo.acceptOrder(delivery!!.orderId, minutes)
+                                val deliveryIdSafe = delivery?.deliveryId ?: run {
+                                    snackbarHostState.showSnackbar("Delivery not available")
+                                    return@launch
+                                }
+                                val result = repo.acceptOrder(deliveryIdSafe, minutes)
                                 result.fold(
                                     onSuccess = {
                                         riderStatus = "accepted"

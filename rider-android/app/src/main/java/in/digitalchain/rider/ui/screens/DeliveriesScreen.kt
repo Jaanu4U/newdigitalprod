@@ -307,19 +307,44 @@ private fun ModernDeliveryCard(
                 .fillMaxWidth()
                 .padding(16.dp)
         ) {
-            // Invoice Number with Status
+            // Invoice Number with Route Sequence and Status
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    delivery.orderId,
-                    style = MaterialTheme.typography.titleMedium.copy(
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFF1F2937)
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    // Route sequence badge (if optimized)
+                    delivery.routeSequence?.let { sequence ->
+                        Surface(
+                            shape = CircleShape,
+                            color = Color(0xFF10B981)
+                        ) {
+                            Text(
+                                sequence.toString(),
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                style = MaterialTheme.typography.labelMedium.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
+                                )
+                            )
+                        }
+                    }
+                    
+                    Text(
+                        delivery.orderId,
+                        style = MaterialTheme.typography.titleMedium.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF1F2937)
+                        ),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
-                )
+                }
                 
                 Surface(
                     shape = RoundedCornerShape(6.dp),
