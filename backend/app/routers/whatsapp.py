@@ -273,9 +273,24 @@ async def get_location(req: GetLocationRequest, current_user = Depends(get_curre
                         db.close()
             
             return location_data
+    except httpx.TimeoutException as e:
+        print(f"[Backend] WhatsApp service timeout: {str(e)}")
+        raise HTTPException(status_code=504, detail="WhatsApp service timeout. The request took too long. Please try again or check if the WhatsApp session is active.")
+    except httpx.HTTPStatusError as e:
+        print(f"[Backend] WhatsApp service HTTP error: {e.response.status_code} - {e.response.text}")
+        error_detail = "WhatsApp service error"
+        try:
+            error_data = e.response.json()
+            error_detail = error_data.get('error', error_data.get('detail', str(e)))
+        except:
+            error_detail = e.response.text or str(e)
+        raise HTTPException(status_code=e.response.status_code, detail=error_detail)
     except httpx.HTTPError as e:
         print(f"[Backend] WhatsApp service error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"WhatsApp service error: {str(e)}")
+    except Exception as e:
+        print(f"[Backend] Unexpected error in get-location: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
 @router.post("/v1/whatsapp/logout")
 async def logout_session(req: LogoutRequest, current_user = Depends(get_current_user)):
@@ -331,3 +346,118 @@ async def list_sessions(current_user = Depends(get_current_user)):
             return {"sessions": filtered_sessions}
     except httpx.HTTPError as e:
         raise HTTPException(status_code=500, detail=f"WhatsApp service error: {str(e)}")
+
+
+class LocationUpdateRequest(BaseModel):
+    phone_number: str
+    latitude: float
+    longitude: float
+    description: Optional[str] = None
+
+
+@router.post("/v1/whatsapp/location-update")
+async def whatsapp_location_update(req: LocationUpdateRequest, db: Session = Depends(get_db)):
+    """
+    Auto-update shipping address when customer sends location via WhatsApp.
+    Called by WhatsApp service webhook when location message is received.
+    """
+    import json
+    from datetime import timezone
+    
+    print(f"📍 [WhatsApp Location Update] Phone: {req.phone_number}, Lat: {req.latitude}, Lng: {req.longitude}")
+    
+    # Format phone number (remove country code if present)
+    phone = req.phone_number.replace('+', '').replace(' ', '').replace('-', '')
+    if phone.startswith('91') and len(phone) == 12:
+        phone = phone[2:]  # Remove country code for matching
+    
+    # Find customer by phone number
+    customer = db.query(models.Customer).filter(
+        models.Customer.phone.like(f'%{phone}%')
+    ).first()
+    
+    if not customer:
+        print(f"❌ [WhatsApp Location] No customer found for phone: {req.phone_number}")
+        return {"success": False, "error": "Customer not found"}
+    
+    print(f"✅ [WhatsApp Location] Found customer: {customer.name} (ID: {customer.customer_id})")
+    
+    # Get Google Maps API key
+    api_key = get_google_maps_api_key(db)
+    
+    # Reverse geocode to get address
+    address = None
+    try:
+        async with httpx.AsyncClient() as client:
+            geocode_response = await client.get(
+                f"https://maps.googleapis.com/maps/api/geocode/json",
+                params={
+                    "latlng": f"{req.latitude},{req.longitude}",
+                    "key": api_key
+                },
+                timeout=10.0
+            )
+            geocode_data = geocode_response.json()
+            
+            if geocode_data.get("status") == "OK" and geocode_data.get("results"):
+                address = geocode_data["results"][0]["formatted_address"]
+                print(f"📍 [WhatsApp Location] Geocoded address: {address}")
+    except Exception as e:
+        print(f"⚠️ [WhatsApp Location] Geocoding failed: {e}")
+        address = req.description or f"Location: {req.latitude}, {req.longitude}"
+    
+    # Find pending orders for this customer
+    pending_orders = db.query(models.SyncLog).filter(
+        models.SyncLog.org_id == customer.org_id,
+        models.SyncLog.type.in_(['invoice', 'invoice_draft'])
+    ).order_by(models.SyncLog.created_at.desc()).limit(20).all()
+    
+    updated_count = 0
+    for order_log in pending_orders:
+        try:
+            order_data = json.loads(order_log.payload) if isinstance(order_log.payload, str) else order_log.payload
+            
+            # Skip if not this customer's order or already delivered
+            if order_data.get('customer_id') != customer.customer_id:
+                continue
+            if order_data.get('status') in ['delivered', 'completed', 'cancelled']:
+                continue
+            
+            invoice_id = order_data.get('invoice_id')
+            if not invoice_id:
+                continue
+            
+            # Update shipment with new address and coordinates
+            shipment_log = models.SyncLog(
+                org_id=customer.org_id,
+                user_id=customer.customer_id,
+                type='invoice_shipment_updated',
+                payload=json.dumps({
+                    'invoice_id': invoice_id,
+                    'shipping_address': address,
+                    'latitude': req.latitude,
+                    'longitude': req.longitude,
+                    'updated_via': 'whatsapp_location',
+                    'updated_at': datetime.now(timezone.utc).isoformat() + 'Z'
+                }),
+                created_at=datetime.now(timezone.utc)
+            )
+            db.add(shipment_log)
+            updated_count += 1
+            
+            print(f"✅ [WhatsApp Location] Updated order {order_data.get('invoice_no')} with new address")
+        except Exception as e:
+            print(f"⚠️ [WhatsApp Location] Error updating order: {e}")
+            continue
+            
+    db.commit()
+    
+    return {
+        "success": True,
+        "customer_name": customer.name,
+        "address": address,
+        "orders_updated": updated_count,
+        "latitude": req.latitude,
+        "longitude": req.longitude
+    }
+

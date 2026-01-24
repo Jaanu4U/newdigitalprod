@@ -653,13 +653,17 @@ async def bulk_upload_invoices(
     warnings: List[Dict[str, Any]] = []
     upload_batch_id = str(uuid.uuid4())  # Track this bulk upload session
     
-    # Fetch Google API key from global platform settings for geocoding
+    # Fetch Google API key from global platform settings for geocoding (with fallback)
     platform_row = db.query(models.PlatformSettings).order_by(models.PlatformSettings.id.asc()).first()
     google_api_key = None
     if platform_row:
         cfg = platform_row.email_config or {}
         maps = cfg.get('maps_config') or {}
         google_api_key = maps.get("google_api_key")
+
+    # Fallback to default key if none configured (matches rider flow)
+    if not google_api_key:
+        google_api_key = "AIzaSyDJVgqPI6Gbu1YXxMBZnJazQ43r7O9nmv0"
     
     # Create bulk upload log entry
     upload_log = models.SyncLog(
@@ -1122,6 +1126,38 @@ async def bulk_upload_invoices(
             # Use invoice_draft type so orders appear in the orders page
             invoice_type = 'invoice_draft'
             order_status = 'return_initiated' if is_return else 'draft'
+
+            # Resolve delivery coordinates for the shipping address
+            delivery_latitude = None
+            delivery_longitude = None
+
+            # Prefer geocoded coordinates already stored on the customer (from earlier steps)
+            if getattr(customer, 'latitude', None) and getattr(customer, 'longitude', None):
+                try:
+                    delivery_latitude = float(customer.latitude)
+                    delivery_longitude = float(customer.longitude)
+                except (TypeError, ValueError):
+                    delivery_latitude = None
+                    delivery_longitude = None
+
+            # If still missing and Google API key is available, geocode the shipping address
+            if (delivery_latitude is None or delivery_longitude is None) and google_api_key:
+                address_to_geocode = customer_data.get("shipping_address") or customer_data["address"]
+                if address_to_geocode:
+                    coords = await geocode_address(address_to_geocode, google_api_key, principal.org_id, db, principal.user_id)
+                    if coords:
+                        delivery_latitude, delivery_longitude = coords[0], coords[1]
+                        try:
+                            # Persist back to customer for reuse
+                            customer.latitude = str(coords[0])
+                            customer.longitude = str(coords[1])
+                        except Exception:
+                            pass
+                        try:
+                            with open('/tmp/upload_debug.log', 'a') as f:
+                                f.write(f"Geocoded shipping address for {customer_data.get('name')}: {address_to_geocode} -> {coords}\n")
+                        except Exception:
+                            pass
             
             # Create invoice payload with all items
             invoice_payload = {
@@ -1151,6 +1187,10 @@ async def bulk_upload_invoices(
                 "upload_batch_id": upload_batch_id,  # Link to bulk upload session
                 "delivery_address": customer_data["shipping_address"],
                 "shipping_address": customer_data["shipping_address"],
+                "delivery_latitude": delivery_latitude,
+                "delivery_longitude": delivery_longitude,
+                "shipping_latitude": delivery_latitude,
+                "shipping_longitude": delivery_longitude,
             }
             
             # Check if invoice with this number already exists (skip for now - always create new)
@@ -1202,7 +1242,10 @@ async def bulk_upload_invoices(
                         customer=customer.name,
                         customer_phone=customer.phone,
                         address=customer_data.get("shipping_address") or customer_data["address"],
+                        delivery_latitude=str(delivery_latitude) if delivery_latitude else None,
+                        delivery_longitude=str(delivery_longitude) if delivery_longitude else None,
                         status='assigned',
+                        rider_status='assigned',
                         assigned_rider_id=rider.user_id,
                         tracking_number=customer_data.get("tracking_number"),
                         created_at=datetime.now(timezone.utc),
@@ -1288,6 +1331,41 @@ async def bulk_upload_invoices(
     # Commit all changes
     try:
         db.commit()
+        
+        # Auto-optimize routes for riders with new assignments
+        print(f"\n🚚 Auto-optimizing routes for assigned riders...")
+        riders_to_optimize = set()
+        for inv in processed_invoices:
+            if inv.get('rider_assigned') and inv.get('rider_name'):
+                riders_to_optimize.add(inv['rider_name'])
+        
+        if riders_to_optimize:
+            from .rider_delivery import optimize_rider_route, OptimizeRouteIn
+            
+            optimization_results = []
+            for rider_name in riders_to_optimize:
+                try:
+                    print(f"  Optimizing route for: {rider_name}")
+                    optimize_payload = OptimizeRouteIn(
+                        rider_name=rider_name,
+                        use_google_maps=False
+                    )
+                    result = optimize_rider_route(optimize_payload, principal, db)
+                    
+                    if result.get('status') == 'success':
+                        optimization_results.append({
+                            'rider_name': rider_name,
+                            'optimized_count': result.get('optimized_count', 0),
+                            'distance_km': result.get('stats', {}).get('total_distance_km', 0)
+                        })
+                        print(f"  ✅ Optimized {result.get('optimized_count', 0)} deliveries for {rider_name}")
+                    else:
+                        print(f"  ⚠️ No deliveries to optimize for {rider_name}")
+                except Exception as e:
+                    print(f"  ❌ Failed to optimize route for {rider_name}: {e}")
+            
+            if optimization_results:
+                print(f"✅ Auto-optimized routes for {len(optimization_results)} rider(s)")
         
         # Write detailed report to log file
         with open('/tmp/upload_debug.log', 'a') as f:

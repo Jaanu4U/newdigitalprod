@@ -164,6 +164,7 @@ class OrgSettingsOut(BaseModel):
     business_settings: Optional[Dict[str, Any]] = None
     provider_settings: Optional[Dict[str, Any]] = None
     whatsapp_settings: Optional[Dict[str, Any]] = None
+    communication_settings: Optional[Dict[str, Any]] = None
 
 class OrgSettingsUpdateIn(BaseModel):
     name: Optional[str] = None
@@ -183,6 +184,7 @@ class OrgSettingsUpdateIn(BaseModel):
     business_settings: Optional[Dict[str, Any]] = None
     provider_settings: Optional[Dict[str, Any]] = None
     whatsapp_settings: Optional[Dict[str, Any]] = None
+    communication_settings: Optional[Dict[str, Any]] = None
 
 
 # Shipment Provider schemas

@@ -76,13 +76,18 @@ app.include_router(payment.router, prefix="/v1", tags=["payment"])
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket, token: str = None):
     """WebSocket endpoint for real-time updates"""
+    # Accept connection first to avoid middleware issues
+    await websocket.accept()
+    
     try:
         # Get user info from token
         principal = await get_current_principal_ws(token)
         if not principal or not principal.org_id:
+            print(f"[WebSocket] Unauthorized connection attempt, token valid: {token is not None}")
             await websocket.close(code=1008, reason="Unauthorized")
             return
         
+        print(f"[WebSocket] Client connected: org_id={principal.org_id}, user_id={principal.user_id}")
         await manager.connect(websocket, principal.org_id)
         
         try:

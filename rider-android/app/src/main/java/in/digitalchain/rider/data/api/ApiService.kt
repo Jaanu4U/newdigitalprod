@@ -51,6 +51,9 @@ interface ApiService {
     
     @POST("rider/complete-delivery")
     suspend fun completeDelivery(@Body body: CompleteDeliveryRequest): Map<String, Any>
+
+    @POST("rider/cancel-delivery")
+    suspend fun cancelDelivery(@Body body: CancelDeliveryRequest): Map<String, Any>
     
     @GET("org/maps-api-key")
     suspend fun getGoogleMapsApiKey(): GoogleMapsApiKeyResponse
@@ -140,10 +143,12 @@ data class AssignedOrderDto(
     val customer_phone: String,
     val delivery_latitude: Any?,
     val delivery_longitude: Any?,
-    val shipping_address: String?,
+    val delivery_address: String?,  // Final delivery address (shipping if set, else billing)
+    val shipping_address: String?,  // Actual shipping address if explicitly set
     val status: String,
     val rider_status: String,
-    val amount: Double? = null
+    val amount: Double? = null,
+    val route_sequence: Int? = null  // Optimized delivery sequence (null if not optimized)
 )
 
 @JsonClass(generateAdapter = true)
@@ -212,6 +217,12 @@ data class CompleteDeliveryRequest(
     val invoice_id: String,
     val location: LocationPoint,
     val payment: PaymentPayload
+)
+
+@JsonClass(generateAdapter = true)
+data class CancelDeliveryRequest(
+    val invoice_id: String,
+    val reason: String
 )
 
 @JsonClass(generateAdapter = true)

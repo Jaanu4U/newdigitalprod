@@ -10,5 +10,6 @@ data class Delivery(
     val latitude: Double?,
     val longitude: Double?,
     val customerPhone: String?,
-    val amount: Double?
+    val amount: Double?,
+    val routeSequence: Int? = null  // Optimized delivery sequence
 )

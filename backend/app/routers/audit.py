@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from ..db import get_db
 from .. import models
@@ -100,7 +101,8 @@ def get_completed_orders_audit(
         try:
             assignment_data = json.loads(assignment.payload or '{}')
             invoice_id = assignment_data.get('invoice_id')
-            rider_user_id = assignment_data.get('rider_user_id')
+            # Support both 'rider_id' (new) and 'rider_user_id' (legacy)
+            rider_user_id = assignment_data.get('rider_id') or assignment_data.get('rider_user_id')
             
             if invoice_id:
                 invoice_ids.append(invoice_id)
@@ -126,6 +128,36 @@ def get_completed_orders_audit(
             except:
                 continue
     
+    # Pre-load delivery records (batch) to access latest notes and locations
+    deliveries_map = {}
+    if invoice_drafts:
+        delivery_lookup_ids = set()
+        for inv_id, draft in invoice_drafts.items():
+            if inv_id:
+                delivery_lookup_ids.add(str(inv_id))
+            invoice_no = draft.get('invoice_no')
+            if invoice_no:
+                delivery_lookup_ids.add(str(invoice_no))
+            order_id_from_draft = draft.get('order_id') or draft.get('invoice_id')
+            if order_id_from_draft:
+                delivery_lookup_ids.add(str(order_id_from_draft))
+
+        if delivery_lookup_ids:
+            lookup_values = list(delivery_lookup_ids)
+            delivery_records = db.query(models.Delivery).filter(
+                models.Delivery.org_id == principal.org_id,
+                or_(
+                    models.Delivery.order_id.in_(lookup_values),
+                    models.Delivery.delivery_id.in_(lookup_values)
+                )
+            ).all()
+
+            for record in delivery_records:
+                if record.order_id:
+                    deliveries_map[str(record.order_id)] = record
+                if record.delivery_id:
+                    deliveries_map[str(record.delivery_id)] = record
+
     # Pre-load riders (batch)
     riders_map = {}
     if rider_user_ids:
@@ -145,6 +177,7 @@ def get_completed_orders_audit(
                 'rider_order_accepted',
                 'rider_delivery_started', 
                 'delivery_completed',
+                'delivery_cancelled',
                 'pod_image_uploaded'
             ])
         ).order_by(models.SyncLog.created_at).all()
@@ -166,7 +199,8 @@ def get_completed_orders_audit(
         try:
             assignment_data = json.loads(assignment.payload or '{}')
             invoice_id = assignment_data.get('invoice_id')
-            rider_user_id = assignment_data.get('rider_user_id')
+            # Support both 'rider_id' (new) and 'rider_user_id' (legacy)
+            rider_user_id = assignment_data.get('rider_id') or assignment_data.get('rider_user_id')
             
             if not invoice_id:
                 continue
@@ -183,11 +217,30 @@ def get_completed_orders_audit(
             # Get rider from pre-loaded map
             rider = riders_map.get(rider_user_id) if rider_user_id else None
             
+            # Locate delivery record for accessing persisted delivery notes
+            delivery_record = None
+            possible_delivery_keys = [
+                invoice_id,
+                invoice_data.get('invoice_no'),
+                invoice_data.get('order_id'),
+                invoice_data.get('invoice_id'),
+                assignment_data.get('delivery_id'),
+                assignment_data.get('order_id')
+            ]
+            for candidate in possible_delivery_keys:
+                if candidate is None:
+                    continue
+                delivery_record = deliveries_map.get(str(candidate))
+                if delivery_record:
+                    break
+
             # Process status logs from pre-loaded map
             accepted_at = None
             in_transit_at = None
             delivered_at = None
             completed_at = None
+            cancelled_at = None
+            cancellation_reason = None
             estimated_minutes = None
             pickup_location = None
             delivery_location = None
@@ -221,11 +274,24 @@ def get_completed_orders_audit(
                     delivery_location = log_data.get('location')
                     payment_info = log_data.get('payment')
                     current_status = 'completed'
+                elif log_type == 'delivery_cancelled':
+                    cancelled_at = log_data.get('cancelled_at') or log_created_at.isoformat() + 'Z'
+                    cancellation_reason = log_data.get('reason')
+                    current_status = 'cancelled'
             
             # Apply status filter
             if status and current_status != status:
                 continue
             
+            delivery_notes_value = None
+            if delivery_record and getattr(delivery_record, 'delivery_notes', None):
+                delivery_notes_value = delivery_record.delivery_notes
+            else:
+                delivery_notes_value = invoice_data.get('delivery_notes')
+
+            if not delivery_notes_value:
+                delivery_notes_value = cancellation_reason
+
             # Get customer information from invoice_data
             customer_name = invoice_data.get('customer_name', 'Unknown')
             customer_phone = invoice_data.get('customer_phone')
@@ -243,6 +309,15 @@ def get_completed_orders_audit(
             if not delivery_location:
                 delivery_lat = invoice_data.get('delivery_latitude')
                 delivery_lng = invoice_data.get('delivery_longitude')
+
+                # Also look for shipping coordinates if delivery coords are missing
+                shipping_lat = invoice_data.get('shipping_latitude')
+                shipping_lng = invoice_data.get('shipping_longitude')
+
+                if not delivery_lat:
+                    delivery_lat = shipping_lat
+                if not delivery_lng:
+                    delivery_lng = shipping_lng
                 if delivery_lat and delivery_lng:
                     try:
                         delivery_location = {
@@ -250,6 +325,21 @@ def get_completed_orders_audit(
                             'lng': float(delivery_lng)
                         }
                         print(f"DEBUG: Using delivery coordinates from invoice draft for {invoice_id}")
+                    except (ValueError, TypeError):
+                        pass
+
+            # If pickup_location not set from logs, use coordinates from invoice draft (pickup/warehouse)
+            if not pickup_location:
+                pickup_lat = invoice_data.get('pickup_latitude') or invoice_data.get('warehouse_latitude')
+                pickup_lng = invoice_data.get('pickup_longitude') or invoice_data.get('warehouse_longitude')
+
+                if pickup_lat and pickup_lng:
+                    try:
+                        pickup_location = {
+                            'lat': float(pickup_lat),
+                            'lng': float(pickup_lng)
+                        }
+                        print(f"DEBUG: Using pickup coordinates from invoice draft for {invoice_id}")
                     except (ValueError, TypeError):
                         pass
             
@@ -294,6 +384,7 @@ def get_completed_orders_audit(
                 'rider_name': rider.name if rider else None,
                 'rider_email': rider.email if rider else None,
                 'rider_phone': rider.cellnumber if rider else None,
+                'rider_user_id': rider.user_id if rider else None,  # Add rider_user_id for route map
                 'shipment_provider': None,  # Removed - not used in frontend
                 'tracking_number': None,  # Removed - not used in frontend
                 'status': current_status,
@@ -305,12 +396,14 @@ def get_completed_orders_audit(
                 'in_transit_at': in_transit_at,
                 'delivered_at': delivered_at,
                 'completed_at': completed_at,
+                'cancelled_at': cancelled_at,
                 'pickup_location': pickup_location,
                 'delivery_location': delivery_location,
                 'payment_method': payment_info.get('method') if payment_info else None,
                 'payment_details': payment_info if payment_info else None,
                 'pod_image_url': pod_image_url,
-                'delivery_notes': None,
+                'delivery_notes': delivery_notes_value,
+                'cancellation_reason': cancellation_reason,
                 'created_by': created_by
             })
         except Exception as e:
@@ -335,10 +428,12 @@ def get_completed_orders_audit(
                 riders_stats[rider_email] = {
                     'rider_name': order.get('rider_name'),
                     'rider_email': rider_email,
+                    'rider_user_id': order.get('rider_user_id'),  # Add rider_user_id for route map
                     'total_assigned': 0,
                     'completed': 0,
                     'in_transit': 0,
-                    'amount_delivered': 0
+                    'amount_delivered': 0,
+                    'has_optimized_route': False
                 }
             riders_stats[rider_email]['total_assigned'] += 1
             if order['status'] == 'completed':
@@ -346,6 +441,29 @@ def get_completed_orders_audit(
                 riders_stats[rider_email]['amount_delivered'] += order['amount']
             elif order['status'] == 'in_transit':
                 riders_stats[rider_email]['in_transit'] += 1
+    
+    # Check for route optimization status from deliveries table
+    if rider_user_ids:
+        delivery_routes = db.query(
+            models.Delivery.assigned_rider_id,
+            models.Delivery.route_sequence
+        ).filter(
+            models.Delivery.assigned_rider_id.in_(rider_user_ids),
+            models.Delivery.route_sequence.isnot(None)
+        ).all()
+        
+        # Get rider emails for those with optimized routes
+        rider_ids_with_routes = set(r.assigned_rider_id for r in delivery_routes if r.route_sequence is not None)
+        if rider_ids_with_routes:
+            riders_with_routes = db.query(models.User).filter(
+                models.User.user_id.in_(rider_ids_with_routes)
+            ).all()
+            rider_emails_with_routes = {r.email for r in riders_with_routes}
+            
+            # Mark riders with optimized routes
+            for email, stats in riders_stats.items():
+                if email in rider_emails_with_routes:
+                    stats['has_optimized_route'] = True
     
     print(f"DEBUG: Returning {len(orders)} orders, summary: {total_orders} total, {completed_orders} completed")
     
@@ -400,7 +518,8 @@ def get_order_audit_detail(
                 event_time = log.created_at.isoformat() + 'Z'
                 
                 if event_type == 'invoice_rider_assigned':
-                    rider_user_id = log_data.get('rider_user_id')
+                    # Support both 'rider_id' (new) and 'rider_user_id' (legacy)
+                    rider_user_id = log_data.get('rider_id') or log_data.get('rider_user_id')
                     timeline.append({
                         'event': 'Order Assigned to Rider',
                         'timestamp': event_time,
@@ -443,6 +562,15 @@ def get_order_audit_detail(
                         'details': {
                             'delivery_location': log_data.get('location'),
                             'payment': log_data.get('payment')
+                        }
+                    })
+                elif event_type == 'delivery_cancelled':
+                    timeline.append({
+                        'event': 'Delivery Cancelled',
+                        'timestamp': log_data.get('cancelled_at') or event_time,
+                        'details': {
+                            'reason': log_data.get('reason'),
+                            'rider_user_id': log_data.get('rider_user_id')
                         }
                     })
                 # Payment events

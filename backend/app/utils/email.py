@@ -1,8 +1,12 @@
 import smtplib
+import os
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.mime.image import MIMEImage
+from email.mime.base import MIMEBase
+from email import encoders
 from sqlalchemy.orm import Session
-from typing import Optional
+from typing import Optional, List
 from ..models import PlatformSettings
 
 
@@ -12,6 +16,133 @@ def get_platform_email_config(db: Session) -> Optional[dict]:
     if settings and settings.email_config:
         return settings.email_config
     return None
+
+
+def send_generic_email(
+    db: Session,
+    to_email: str,
+    subject: str,
+    html_body: str,
+    from_fallback: str = "noreply@digitalchain.in",
+    from_name: str = None,
+    attachments: Optional[List[dict]] = None
+) -> bool:
+    """Send a generic email using platform email configuration (Mailgun or SMTP).
+    
+    Args:
+        from_name: Sender display name (e.g., "Company Name")
+        attachments: List of dicts with 'filepath' and optional 'filename' keys
+    """
+    try:
+        email_config = get_platform_email_config(db)
+        if not email_config:
+            print("[Email] Platform email not configured")
+            return False
+        if email_config.get("enabled") is False:
+            print("[Email] Platform email is disabled")
+            return False
+
+        provider = (email_config.get("provider") or "mailgun").lower()
+
+        if provider == "mailgun":
+            mailgun_config = email_config.get("mailgun", {})
+            api_key = mailgun_config.get("api_key")
+            domain = mailgun_config.get("domain")
+            from_email = mailgun_config.get("from_email", from_fallback)
+
+            if not api_key or not domain:
+                print("[Email] Mailgun API key or domain not configured")
+                return False
+
+            import requests
+
+            from_address = f"{from_name} <{from_email}>" if from_name else from_email
+            
+            data = {
+                "from": from_address,
+                "to": to_email,
+                "subject": subject,
+                "html": html_body
+            }
+            
+            files = []
+            if attachments:
+                for att in attachments:
+                    filepath = att.get('filepath')
+                    if filepath and os.path.exists(filepath):
+                        filename = att.get('filename') or os.path.basename(filepath)
+                        files.append(("attachment", (filename, open(filepath, "rb"))))
+
+            response = requests.post(
+                f"https://api.mailgun.net/v3/{domain}/messages",
+                auth=("api", api_key),
+                data=data,
+                files=files if files else None
+            )
+
+            if response.status_code == 200:
+                print(f"[Email] Generic email sent to {to_email}")
+                return True
+            else:
+                print(f"[Email] Failed to send via Mailgun: {response.status_code} - {response.text}")
+                return False
+
+        elif provider == "smtp":
+            smtp_config = email_config.get("smtp", {})
+            host = smtp_config.get("host")
+            port = smtp_config.get("port", 587)
+            username = smtp_config.get("username")
+            password = smtp_config.get("password")
+            from_email = smtp_config.get("from_email", from_fallback)
+            use_tls = smtp_config.get("use_tls", True)
+
+            if not all([host, username, password]):
+                print("[Email] SMTP configuration incomplete")
+                return False
+
+            msg = MIMEMultipart("mixed")
+            msg["Subject"] = subject
+            msg["From"] = f"{from_name} <{from_email}>" if from_name else from_email
+            msg["To"] = to_email
+            
+            # Add HTML body
+            msg.attach(MIMEText(html_body, "html"))
+            
+            # Add attachments
+            if attachments:
+                for att in attachments:
+                    filepath = att.get('filepath')
+                    if filepath and os.path.exists(filepath):
+                        filename = att.get('filename') or os.path.basename(filepath)
+                        with open(filepath, 'rb') as f:
+                            # Determine if it's an image
+                            if filepath.lower().endswith(('.png', '.jpg', '.jpeg', '.gif')):
+                                img = MIMEImage(f.read())
+                                img.add_header('Content-Disposition', 'attachment', filename=filename)
+                                msg.attach(img)
+                            else:
+                                part = MIMEBase('application', 'octet-stream')
+                                part.set_payload(f.read())
+                                encoders.encode_base64(part)
+                                part.add_header('Content-Disposition', f'attachment; filename={filename}')
+                                msg.attach(part)
+
+            with smtplib.SMTP(host, port) as server:
+                if use_tls:
+                    server.starttls()
+                server.login(username, password)
+                server.send_message(msg)
+
+            print(f"[Email] Generic email sent to {to_email} via SMTP")
+            return True
+
+        else:
+            print(f"[Email] Unsupported provider: {provider}")
+            return False
+
+    except Exception as e:
+        print(f"[Email] Error sending generic email: {str(e)}")
+        return False
 
 
 def send_verification_email(

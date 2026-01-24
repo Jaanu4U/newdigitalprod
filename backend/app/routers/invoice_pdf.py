@@ -73,8 +73,8 @@ def _auto_create_delivery(db: Session, org_id: str, invoice_id: str, customer_id
             order_id=invoice_id,
             customer=customer.name or "Unknown",
             address=delivery_address,
-            latitude=str(invoice_data.get('delivery_latitude')) if invoice_data.get('delivery_latitude') else None,
-            longitude=str(invoice_data.get('delivery_longitude')) if invoice_data.get('delivery_longitude') else None,
+            delivery_latitude=str(invoice_data.get('delivery_latitude')) if invoice_data.get('delivery_latitude') else None,
+            delivery_longitude=str(invoice_data.get('delivery_longitude')) if invoice_data.get('delivery_longitude') else None,
             status="pending",
             created_at=datetime.utcnow()
         )
@@ -198,6 +198,18 @@ def list_invoice_drafts(request: Request, principal: CurrentPrincipal = Depends(
     ).order_by(models.SyncLog.created_at.desc()).limit(min(limit, 500))
     rows = q.all()
     import json as _json
+
+    parsed_rows: Dict[int, Dict[str, Any]] = {}
+    invoice_ids: set[str] = set()
+    for r in rows:
+        try:
+            data = _json.loads(r.payload or '{}')
+        except Exception:
+            data = {}
+        parsed_rows[r.id] = data
+        inv_id = data.get('invoice_id') or data.get('order_id')
+        if inv_id:
+            invoice_ids.add(inv_id)
     
     # Fetch all rider assignments for this org in one query (optimized)
     rider_assignments_q = db.query(models.SyncLog).filter(
@@ -269,6 +281,38 @@ def list_invoice_drafts(request: Request, principal: CurrentPrincipal = Depends(
                     rider_delivery_status_map[inv_id] = 'pending'
         except Exception:
             pass
+
+    # Track cancellations
+    cancellation_logs = db.query(models.SyncLog).filter(
+        models.SyncLog.org_id == org.org_id,
+        models.SyncLog.type == 'delivery_cancelled'
+    ).order_by(models.SyncLog.created_at.desc()).all()
+
+    cancellation_map: Dict[str, Dict[str, Any]] = {}
+    cancellation_user_ids: set[str] = set()
+
+    for clog in cancellation_logs:
+        try:
+            clog_data = _json.loads(clog.payload or '{}')
+        except Exception:
+            clog_data = {}
+
+        inv_id = clog_data.get('invoice_id')
+        if not inv_id or inv_id in cancellation_map:
+            continue
+
+        user_id = clog_data.get('rider_user_id') or clog.user_id
+        if user_id:
+            cancellation_user_ids.add(user_id)
+
+        cancellation_map[inv_id] = {
+            'reason': clog_data.get('reason'),
+            'cancelled_at': clog_data.get('cancelled_at'),
+            'user_id': user_id,
+        }
+
+        rider_status_map[inv_id] = 'cancelled'
+        rider_delivery_status_map[inv_id] = 'cancelled'
     
     # Fetch shipment assignments for all invoices (optimized)
     shipment_events_q = db.query(models.SyncLog).filter(
@@ -287,18 +331,24 @@ def list_invoice_drafts(request: Request, principal: CurrentPrincipal = Depends(
                 shipment_map[inv_id] = se_data
         except Exception:
             pass
+
+    delivery_map: Dict[str, models.Delivery] = {}
+    if invoice_ids:
+        deliveries = db.query(models.Delivery).filter(
+            models.Delivery.org_id == org.org_id,
+            models.Delivery.order_id.in_(list(invoice_ids))
+        ).all()
+        delivery_map = {d.order_id: d for d in deliveries}
     
     # Fetch user names for created_by tracking
-    user_ids = list(set([r.user_id for r in rows if r.user_id] + [getattr(r, 'created_by', None) for r in rows if getattr(r, 'created_by', None)]))
+    user_ids = set([r.user_id for r in rows if r.user_id] + [getattr(r, 'created_by', None) for r in rows if getattr(r, 'created_by', None)])
+    user_ids.update(uid for uid in cancellation_user_ids if uid)
     users_q = db.query(models.User).filter(models.User.user_id.in_(user_ids)).all() if user_ids else []
     user_map = {u.user_id: u.name or u.email for u in users_q}
     
     drafts = []
     for r in rows:
-        try:
-            data = _json.loads(r.payload or '{}')
-        except Exception:
-            data = {}
+        data = parsed_rows.get(r.id, {})
         
         # Handle both invoice_id (for invoices) and order_id (for customer purchase orders)
         invoice_id = data.get('invoice_id') or data.get('order_id')
@@ -313,6 +363,21 @@ def list_invoice_drafts(request: Request, principal: CurrentPrincipal = Depends(
                 shipment_status = 'delivered'
         else:
             shipment_status = rider_delivery_status
+
+        delivery_record = delivery_map.get(invoice_id)
+        if delivery_record and (delivery_record.status or '').lower() == 'cancelled':
+            shipment_status = 'cancelled'
+
+        cancellation_info = cancellation_map.get(invoice_id)
+        cancellation_reason = None
+        cancellation_recorded_at = None
+        cancellation_recorded_by_name = None
+        if cancellation_info:
+            cancellation_reason = cancellation_info.get('reason')
+            cancellation_recorded_at = cancellation_info.get('cancelled_at')
+            cancellation_recorded_by_name = user_map.get(cancellation_info.get('user_id'))
+        elif delivery_record and (delivery_record.status or '').lower() == 'cancelled':
+            cancellation_reason = delivery_record.delivery_notes
         
         # Get customer phone - try from invoice data first, then customer record
         customer_phone = None
@@ -366,6 +431,11 @@ def list_invoice_drafts(request: Request, principal: CurrentPrincipal = Depends(
             'delivery_latitude': data.get('delivery_latitude'),  # WhatsApp location coordinates
             'delivery_longitude': data.get('delivery_longitude'),
             'delivery_address': data.get('delivery_address'),
+            'status': (delivery_record.status if delivery_record else None),
+            'delivery_notes': delivery_record.delivery_notes if delivery_record else data.get('delivery_notes'),
+            'cancellation_reason': cancellation_reason,
+            'cancellation_recorded_at': cancellation_recorded_at,
+            'cancellation_recorded_by_name': cancellation_recorded_by_name,
             'shipment': {
                 'provider_name': shipment_info.get('provider_name') if shipment_info else (rider_map.get(invoice_id) if rider_map.get(invoice_id) else None),
                 'provider_code': shipment_info.get('provider_code') if shipment_info else ('rider' if rider_map.get(invoice_id) else None),
@@ -880,6 +950,7 @@ def save_invoice(customer_id: str, payload: SaveInvoiceIn, request: Request, pri
         'customer_name': display_customer_name,  # Use computed display name
         'customer_company_name': cust.company_name,
         'customer_phone': cust.phone,
+        'customer_email': cust.email,
         'customer_address': cust.address,
         'invoice_no': invoice_no,
         'items': payload.items or [],
@@ -995,12 +1066,43 @@ def delete_invoice_draft(draft_id: int, request: Request, principal: CurrentPrin
                 except Exception as e:
                     logger.error(f"Error checking delivery log {dlog.id}: {e}")
             
-            # 4. Delete from deliveries table (for rider dashboard)
+            # 4. Delete POD images
+            pod_logs = db.query(models.SyncLog).filter(
+                models.SyncLog.org_id == org.org_id,
+                models.SyncLog.type == 'pod_image_uploaded'
+            ).all()
+            
+            for pod_log in pod_logs:
+                try:
+                    pod_data = _json.loads(pod_log.payload or '{}')
+                    if pod_data.get('invoice_id') == invoice_id:
+                        logger.info(f"Deleting POD image log {pod_log.id} for invoice {invoice_id}")
+                        db.delete(pod_log)
+                        deleted_count += 1
+                except Exception as e:
+                    logger.error(f"Error checking POD log {pod_log.id}: {e}")
+            
+            # 5. Delete payments first (foreign key constraint)
             deliveries = db.query(models.Delivery).filter(
                 models.Delivery.org_id == org.org_id,
                 models.Delivery.order_id == invoice_id
             ).all()
             
+            for delivery in deliveries:
+                # Delete payments for this delivery
+                payments = db.query(models.Payment).filter(
+                    models.Payment.delivery_id == delivery.delivery_id
+                ).all()
+                
+                for payment in payments:
+                    logger.info(f"Deleting payment {payment.payment_id} for delivery {delivery.delivery_id}")
+                    db.delete(payment)
+                    deleted_count += 1
+            
+            # Commit payment deletions before deleting deliveries (FK constraint)
+            db.commit()
+            
+            # 6. Delete from deliveries table (for rider dashboard)
             for delivery in deliveries:
                 logger.info(f"Deleting delivery {delivery.delivery_id} for invoice {invoice_id}")
                 db.delete(delivery)
@@ -1568,27 +1670,39 @@ def update_shipping_address(payload: ShipmentAddressPayload, request: Request, p
         except Exception:
             pass
     
+    # If no existing shipment, create a new one with just the address
     if not existing_shipment:
-        raise HTTPException(status_code=404, detail='No shipment assigned to this invoice')
-    
-    # Create updated shipment event with address
-    ev = models.SyncLog(
-        org_id=org.org_id,
-        user_id=principal.user_id,
-        type='invoice_shipment_updated',
-        payload=_json.dumps({
-            'invoice_id': payload.invoice_id,
-            'provider_id': existing_shipment.get('provider_id'),
-            'provider_name': existing_shipment.get('provider_name'),
-            'provider_code': existing_shipment.get('provider_code'),
-            'tracking_url': existing_shipment.get('tracking_url'),
-            'tracking_number': existing_shipment.get('tracking_number'),
-            'status': existing_shipment.get('status', 'pending'),
-            'shipping_address': payload.shipping_address,
-            'updated_at': datetime.utcnow().isoformat() + 'Z',
-            'updated_by': principal.user_id,
-        })
-    )
+        ev = models.SyncLog(
+            org_id=org.org_id,
+            user_id=principal.user_id,
+            type='invoice_shipment_assigned',
+            payload=_json.dumps({
+                'invoice_id': payload.invoice_id,
+                'shipping_address': payload.shipping_address,
+                'status': 'pending',
+                'created_at': datetime.utcnow().isoformat() + 'Z',
+                'created_by': principal.user_id,
+            })
+        )
+    else:
+        # Create updated shipment event with address
+        ev = models.SyncLog(
+            org_id=org.org_id,
+            user_id=principal.user_id,
+            type='invoice_shipment_updated',
+            payload=_json.dumps({
+                'invoice_id': payload.invoice_id,
+                'provider_id': existing_shipment.get('provider_id'),
+                'provider_name': existing_shipment.get('provider_name'),
+                'provider_code': existing_shipment.get('provider_code'),
+                'tracking_url': existing_shipment.get('tracking_url'),
+                'tracking_number': existing_shipment.get('tracking_number'),
+                'status': existing_shipment.get('status', 'pending'),
+                'shipping_address': payload.shipping_address,
+                'updated_at': datetime.utcnow().isoformat() + 'Z',
+                'updated_by': principal.user_id,
+            })
+        )
     db.add(ev)
     db.commit()
     

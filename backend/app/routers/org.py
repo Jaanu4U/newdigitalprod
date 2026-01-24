@@ -416,6 +416,7 @@ def get_org_settings(request: Request, principal: CurrentPrincipal = Depends(get
     business = s.get("business") or s.get("business_settings")
     providers = s.get("providers") or s.get("provider_settings")
     whatsapp = s.get("whatsapp") or s.get("whatsapp_settings")
+    communication = s.get("communication") or s.get("communication_settings")
 
     # Mask secrets in response and add *_present flags
     def mask_section(sec: dict | None, secret_keys: list[str]):
@@ -455,6 +456,7 @@ def get_org_settings(request: Request, principal: CurrentPrincipal = Depends(get
         business_settings=business,
         provider_settings=providers,
         whatsapp_settings=whatsapp,
+        communication_settings=communication,
     )
 
 
@@ -716,6 +718,7 @@ def update_org_settings(
     incoming_business = getattr(payload, "business_settings", None)
     incoming_providers = getattr(payload, "provider_settings", None)
     incoming_whatsapp = getattr(payload, "whatsapp_settings", None)
+    incoming_communication = getattr(payload, "communication_settings", None)
 
     def to_int(val, default=None):
         try:
@@ -729,6 +732,7 @@ def update_org_settings(
     eff_payment = {**(s.get("payment") or {}), **(incoming_payment or {})}
     eff_email = {**(s.get("email") or {}), **(incoming_email or {})}
     eff_maps = {**(s.get("maps") or {}), **(incoming_maps or {})}
+    eff_comm = {**(s.get("communication") or {}), **(incoming_communication or {})}
 
     # Payment validation
     if eff_payment.get("enabled"):
@@ -772,6 +776,12 @@ def update_org_settings(
         if not (eff_maps.get("google_api_key") or (s.get("maps") or {}).get("google_api_key")):
             raise HTTPException(status_code=400, detail="Google Maps API key is required")
 
+    # Communication validation (card completion emails)
+    if eff_comm.get("card_receipt_enabled"):
+        comm_email = eff_comm.get("card_receipt_email") or ""
+        if not is_email(comm_email):
+            raise HTTPException(status_code=400, detail="Valid communication email is required when card receipts are enabled")
+
     def merge_section(key_aliases: list[str], incoming: dict | None):
         if incoming is None:
             return
@@ -812,6 +822,7 @@ def update_org_settings(
     merge_section(["business", "business_settings"], incoming_business)
     merge_section(["providers", "provider_settings"], incoming_providers)
     merge_section(["whatsapp", "whatsapp_settings"], incoming_whatsapp)
+    merge_section(["communication", "communication_settings"], incoming_communication)
 
     # Transform payment settings to new gateway structure if needed
     if incoming_payment and "payment" in s:

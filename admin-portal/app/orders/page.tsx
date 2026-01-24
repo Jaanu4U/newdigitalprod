@@ -7,6 +7,7 @@ import Link from "next/link";
 import { Eye, Truck, X, Package, CheckCircle, MapPin, MessageCircle, Upload, Download, Trash2, Edit } from "lucide-react";
 import PageHeader from "@/components/PageHeader";
 import UploadModal from "./UploadModal";
+import { useWebSocket } from "@/hooks/useWebSocket";
 
 interface ShipmentInfo {
   provider_name?: string;
@@ -34,6 +35,11 @@ interface DraftRow {
   items_count: number;
   rider_name?: string;
   rider_assignment_status?: string;  // pending, accepted, rejected
+  status?: string;
+  delivery_notes?: string | null;
+  cancellation_reason?: string | null;
+  cancellation_recorded_at?: string | null;
+  cancellation_recorded_by_name?: string | null;
   shipment?: ShipmentInfo | null;
 }
 
@@ -85,7 +91,7 @@ function OrdersInner() {
   const [whatsappEnabled, setWhatsappEnabled] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
-  const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [statusFilter, setStatusFilter] = useState<string>("active");
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(20);
   const [showPhoneModal, setShowPhoneModal] = useState(false);
@@ -96,6 +102,15 @@ function OrdersInner() {
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [showBulkRiderModal, setShowBulkRiderModal] = useState(false);
   const [bulkAssigning, setBulkAssigning] = useState(false);
+  const [optimizingRoute, setOptimizingRoute] = useState(false);
+  const [showOptimizeModal, setShowOptimizeModal] = useState(false);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deleteInvoiceId, setDeleteInvoiceId] = useState<number | null>(null);
+  const [deleteInvoiceNo, setDeleteInvoiceNo] = useState<string>("");
+  const [deleteConfirmText, setDeleteConfirmText] = useState("");
+  const [deleting, setDeleting] = useState(false);
+  const [showBulkDeleteModal, setShowBulkDeleteModal] = useState(false);
+  const [bulkDeleteConfirmText, setBulkDeleteConfirmText] = useState("");
   const [unreadNotifications, setUnreadNotifications] = useState(0);
   const searchParams = useSearchParams();
   const from = searchParams?.get('from');
@@ -421,7 +436,7 @@ function OrdersInner() {
     }
   };
 
-  const refreshDrafts = async () => {
+  const refreshDrafts = useCallback(async () => {
     try {
       const token = localStorage.getItem('dc_access') || '';
       const url = `${base}invoice/drafts`;
@@ -436,7 +451,7 @@ function OrdersInner() {
     } catch (e) {
       console.error('Failed to refresh drafts:', e);
     }
-  };
+  }, [base]);
 
   const openRiderModal = (invoice: DraftRow) => {
     // Only block if rider has accepted
@@ -744,7 +759,20 @@ function OrdersInner() {
       if (!res.ok) {
         const error = await res.json().catch(() => ({}));
         console.error('WhatsApp location fetch failed:', error);
-        throw new Error(error.detail || error.error || 'Failed to fetch location from WhatsApp');
+        
+        // Handle different error types
+        let errorMessage = 'Failed to fetch location from WhatsApp';
+        if (res.status === 504 || error.detail?.includes('timeout')) {
+          errorMessage = '⏱️ Request timed out. The WhatsApp service is taking too long to respond.\n\nPossible causes:\n• WhatsApp session may be disconnected\n• Too many messages to search through\n• Network issues\n\nPlease try again or check WhatsApp session status.';
+        } else if (res.status === 404) {
+          errorMessage = '❌ No location found.\n\n' + (error.detail || error.error || 'No chat or location message found.');
+        } else if (res.status === 400) {
+          errorMessage = '⚠️ ' + (error.detail || error.error || 'Invalid request or WhatsApp client not ready.');
+        } else {
+          errorMessage = '❌ ' + (error.detail || error.error || 'Unknown error occurred.');
+        }
+        
+        throw new Error(errorMessage);
       }
 
       const data = await res.json();
@@ -848,44 +876,88 @@ function OrdersInner() {
     setInvoiceUrl("");
   };
 
-  const deleteInvoice = useCallback(async (invoiceId: number) => {
-    if (!confirm('Delete this invoice? This cannot be undone.')) return;
+  const openDeleteModal = useCallback((invoiceId: number, invoiceNo: string) => {
+    console.log('Delete invoice clicked:', invoiceId, invoiceNo);
+    setDeleteInvoiceId(invoiceId);
+    setDeleteInvoiceNo(invoiceNo);
+    setDeleteConfirmText("");
+    setShowDeleteModal(true);
+  }, []);
+
+  const confirmDelete = useCallback(async () => {
+    if (!deleteInvoiceId) return;
+    
+    if (deleteConfirmText.toUpperCase() !== 'DELETE') {
+      alert('Please type DELETE to confirm');
+      return;
+    }
+    
+    setDeleting(true);
     
     try {
       const token = localStorage.getItem('dc_access') || '';
+      const deleteUrl = `${base}invoice/draft/${deleteInvoiceId}`;
+      console.log('Deleting invoice:', deleteUrl);
+      
       const res = await fetch(
-        `${base}invoice/draft/${invoiceId}`,
+        deleteUrl,
         withTenantHeaders({
           method: 'DELETE',
           headers: { Authorization: `Bearer ${token}` }
         })
       );
       
+      console.log('Delete response status:', res.status);
+      
       if (res.ok) {
+        const result = await res.json();
+        console.log('Delete successful:', result);
+        
         // Remove from local state
-        setRows(prev => prev.filter(r => r.id !== invoiceId));
+        setRows(prev => prev.filter(r => r.id !== deleteInvoiceId));
         // Remove from selection if selected
         setSelectedIds(prev => {
           const newSet = new Set(prev);
-          newSet.delete(invoiceId);
+          newSet.delete(deleteInvoiceId);
           return newSet;
         });
+        
+        // Close modal
+        setShowDeleteModal(false);
+        setDeleteInvoiceId(null);
+        setDeleteInvoiceNo("");
+        setDeleteConfirmText("");
+        
+        alert('Invoice deleted successfully');
       } else {
-        alert('Failed to delete invoice');
+        const errorText = await res.text();
+        console.error('Delete failed:', res.status, errorText);
+        alert(`Failed to delete invoice: ${res.status} ${errorText}`);
       }
     } catch (e) {
-      console.error(e);
-      alert('Failed to delete invoice');
+      console.error('Delete error:', e);
+      alert(`Failed to delete invoice: ${e}`);
+    } finally {
+      setDeleting(false);
     }
-  }, [base]);
+  }, [base, deleteInvoiceId, deleteConfirmText]);
 
-  const bulkDeleteInvoices = useCallback(async () => {
+  const openBulkDeleteModal = useCallback(() => {
     if (selectedIds.size === 0) {
       alert('Please select invoices to delete');
       return;
     }
+    setBulkDeleteConfirmText("");
+    setShowBulkDeleteModal(true);
+  }, [selectedIds]);
 
-    if (!confirm(`Delete ${selectedIds.size} selected invoice(s)? This cannot be undone.`)) return;
+  const confirmBulkDelete = useCallback(async () => {
+    if (selectedIds.size === 0) return;
+    
+    if (bulkDeleteConfirmText.toUpperCase() !== 'DELETE') {
+      alert('Please type DELETE to confirm');
+      return;
+    }
     
     setBulkDeleting(true);
     const token = localStorage.getItem('dc_access') || '';
@@ -921,6 +993,10 @@ function OrdersInner() {
         setSelectedIds(new Set());
       }
 
+      // Close modal
+      setShowBulkDeleteModal(false);
+      setBulkDeleteConfirmText("");
+
       // Show result
       if (failCount === 0) {
         alert(`Successfully deleted ${successCount} invoice(s)`);
@@ -933,7 +1009,7 @@ function OrdersInner() {
     } finally {
       setBulkDeleting(false);
     }
-  }, [base, selectedIds]);
+  }, [base, selectedIds, bulkDeleteConfirmText]);
 
   const bulkAssignRider = useCallback(async (riderId: string) => {
     if (selectedIds.size === 0) {
@@ -1009,6 +1085,63 @@ function OrdersInner() {
     }
   }, [base, selectedIds, rows]);
 
+  const optimizeRouteForRider = useCallback(async (riderId: string) => {
+    if (!riderId) {
+      alert('Please select a rider');
+      return;
+    }
+
+    setOptimizingRoute(true);
+    try {
+      const token = localStorage.getItem('dc_access') || '';
+      const res = await fetch(
+        `${base}rider/optimize-route`,
+        withTenantHeaders({
+          method: 'POST',
+          headers: { 
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ 
+            rider_user_id: riderId,
+            use_google_maps: false // Set to true if you want to use Google Maps Distance Matrix API
+          })
+        })
+      );
+
+      if (!res.ok) {
+        const error = await res.json().catch(() => ({}));
+        throw new Error(error.detail || 'Failed to optimize route');
+      }
+
+      const result = await res.json();
+      
+      if (result.status === 'success') {
+        const stats = result.stats || {};
+        alert(
+          `Route optimized successfully!\n\n` +
+          `Optimized: ${result.optimized_count} deliveries\n` +
+          `Skipped: ${result.skipped_count} deliveries\n` +
+          `Total Distance: ${stats.total_distance_km} km\n` +
+          `Estimated Time: ${stats.estimated_time_minutes} minutes`
+        );
+        setShowOptimizeModal(false);
+        // Optionally reload to show updated sequence
+        window.location.reload();
+      } else if (result.status === 'no_deliveries') {
+        alert(result.message || 'No pending deliveries found for this rider');
+      } else {
+        alert('Route optimization completed with warnings. Check console for details.');
+        console.log('Optimization result:', result);
+      }
+    } catch (e: any) {
+      console.error(e);
+      alert(e.message || 'Failed to optimize route');
+    } finally {
+      setOptimizingRoute(false);
+    }
+  }, [base]);
+
   const updatePhoneNumber = useCallback(async () => {
     if (!selectedInvoiceForPhone || !newPhoneNumber.trim()) {
       alert('Please enter a phone number');
@@ -1074,17 +1207,36 @@ function OrdersInner() {
           return false;
         }
       }
-      
-      // Status filter
-      if (statusFilter !== 'all') {
-        if (statusFilter === 'assigned' && !r.rider_name) return false;
-        if (statusFilter === 'shipped' && r.shipment?.status !== 'shipped') return false;
-        if (statusFilter === 'delivered' && r.shipment?.status !== 'delivered') return false;
-        if (statusFilter === 'pending' && (r.rider_name || r.shipment?.status)) return false;
-        if (statusFilter === 'with_address' && !r.delivery_address) return false;
-        if (statusFilter === 'no_address' && r.delivery_address) return false;
+
+      const shipmentStatus = (r.shipment?.status || '').toLowerCase();
+
+      switch (statusFilter) {
+        case 'active':
+          if (shipmentStatus === 'delivered') return false;
+          break;
+        case 'completed':
+          if (shipmentStatus !== 'delivered') return false;
+          break;
+        case 'assigned':
+          if (!r.rider_name) return false;
+          break;
+        case 'shipped':
+          if (shipmentStatus !== 'shipped') return false;
+          break;
+        case 'pending':
+          if (r.rider_name || shipmentStatus) return false;
+          break;
+        case 'with_address':
+          if (!r.delivery_address) return false;
+          break;
+        case 'no_address':
+          if (r.delivery_address) return false;
+          break;
+        case 'all':
+        default:
+          break;
       }
-      
+
       return true;
     });
   }, [rows, searchTerm, statusFilter]);
@@ -1098,6 +1250,99 @@ function OrdersInner() {
     
     return { totalPages, startIndex, endIndex, paginatedRows };
   }, [filteredRows, currentPage, itemsPerPage]);
+
+  const handleRealtimeMessage = useCallback((message: { type?: string; data?: any }) => {
+    if (!message?.type) return;
+
+    if (message.type === 'order_status_update') {
+      const payload = message.data || {};
+      const invoiceId = payload.invoice_id as string | undefined;
+      const status = payload.status as string | undefined;
+      if (!invoiceId || !status) {
+        return;
+      }
+
+      const invoiceNo = payload.invoice_no as string | undefined;
+      const statusLower = status.toLowerCase();
+      setRows(prev => {
+        let updated = false;
+        const next = prev.map(row => {
+          const matchesInvoice = row.invoice_id === invoiceId || (!!invoiceNo && row.invoice_no === invoiceNo);
+          if (!matchesInvoice) {
+            return row;
+          }
+
+          updated = true;
+          const riderStatus = statusLower === 'accepted'
+            ? 'accepted'
+            : statusLower === 'rejected'
+              ? 'rejected'
+              : statusLower === 'cancelled'
+                ? 'cancelled'
+                : statusLower === 'completed'
+                  ? 'completed'
+                  : statusLower === 'in_transit'
+                    ? 'in_transit'
+                    : row.rider_assignment_status;
+
+          let shipmentUpdate = row.shipment ? { ...row.shipment } : null;
+          if (statusLower === 'completed') {
+            shipmentUpdate = { ...(shipmentUpdate || {}), status: 'delivered' };
+          } else if (statusLower === 'in_transit') {
+            shipmentUpdate = { ...(shipmentUpdate || {}), status: 'in_transit' };
+          } else if (statusLower === 'cancelled') {
+            shipmentUpdate = shipmentUpdate ? { ...shipmentUpdate, status: 'cancelled' } : shipmentUpdate;
+          }
+
+          return {
+            ...row,
+            status,
+            rider_name: payload.rider_name || row.rider_name,
+            rider_assignment_status: riderStatus,
+            shipment: shipmentUpdate,
+          };
+        });
+
+        return updated ? next : prev;
+      });
+
+      if (statusLower === 'cancelled') {
+        refreshDrafts();
+      }
+    }
+
+    if (message.type === 'delivery_completed') {
+      const payload = message.data || {};
+      const invoiceId = payload.invoice_id as string | undefined;
+      const invoiceNo = payload.invoice_no as string | undefined;
+      if (!invoiceId && !invoiceNo) {
+        return;
+      }
+
+      setRows(prev => {
+        let updated = false;
+        const next = prev.map(row => {
+          const matchesInvoice = (invoiceId && row.invoice_id === invoiceId) || (invoiceNo && row.invoice_no === invoiceNo);
+          if (!matchesInvoice) {
+            return row;
+          }
+          updated = true;
+          const shipmentUpdate = row.shipment ? { ...row.shipment, status: 'delivered' } : { status: 'delivered' };
+          return {
+            ...row,
+            status: 'completed',
+            rider_assignment_status: 'completed',
+            shipment: shipmentUpdate,
+          };
+        });
+        return updated ? next : prev;
+      });
+
+      refreshDrafts();
+    }
+  }, [refreshDrafts]);
+
+  const { isConnected: isRealtimeConnected } = useWebSocket(handleRealtimeMessage);
 
   // Selection callbacks - defined after paginationData to avoid circular dependency
   const toggleSelectAll = useCallback(() => {
@@ -1160,17 +1405,15 @@ function OrdersInner() {
                 </div>
                 {statusFilter !== 'all' && (
                   <div className="inline-flex items-center gap-2 bg-white/10 backdrop-blur-sm rounded-lg px-4 py-2 border border-white/20">
-                    <span className="font-semibold">Filtered: {rows.filter(r => {
-                      if (statusFilter === 'assigned' && !r.rider_name) return false;
-                      if (statusFilter === 'shipped' && r.shipment?.status !== 'shipped') return false;
-                      if (statusFilter === 'delivered' && r.shipment?.status !== 'delivered') return false;
-                      if (statusFilter === 'pending' && (r.rider_name || r.shipment?.status)) return false;
-                      if (statusFilter === 'with_address' && !r.delivery_address) return false;
-                      if (statusFilter === 'no_address' && r.delivery_address) return false;
-                      return true;
-                    }).length}</span>
+                    <span className="font-semibold">Filtered: {filteredRows.length}</span>
                   </div>
                 )}
+                <div className="inline-flex items-center gap-2 bg-white/10 backdrop-blur-sm rounded-lg px-4 py-2 border border-white/20">
+                  <span className={`inline-flex h-2 w-2 rounded-full ${isRealtimeConnected ? 'bg-green-300 animate-pulse' : 'bg-gray-300'}`} />
+                  <span className="text-xs font-semibold">
+                    {isRealtimeConnected ? 'Live updates on' : 'Live updates reconnecting'}
+                  </span>
+                </div>
               </div>
             </div>
 
@@ -1229,11 +1472,12 @@ function OrdersInner() {
               }}
               className="px-5 py-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent bg-white min-w-[200px] font-semibold"
             >
-              <option value="all">📋 All Status</option>
+              <option value="active">🚚 Active Orders</option>
+              <option value="completed">✅ Completed</option>
+              <option value="all">📋 All Orders</option>
               <option value="pending">⏳ Pending</option>
               <option value="assigned">👤 Assigned to Rider</option>
               <option value="shipped">📦 Shipped</option>
-              <option value="delivered">✅ Delivered</option>
               <option value="with_address">📍 Has Address</option>
               <option value="no_address">❌ No Address</option>
             </select>
@@ -1294,7 +1538,18 @@ function OrdersInner() {
                   {bulkAssigning ? 'Assigning...' : `Assign Rider to ${selectedIds.size}`}
                 </button>
                 <button
-                  onClick={bulkDeleteInvoices}
+                  onClick={() => {
+                    loadRiders();
+                    setShowOptimizeModal(true);
+                  }}
+                  disabled={optimizingRoute}
+                  className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+                >
+                  <MapPin size={16} />
+                  {optimizingRoute ? 'Optimizing...' : 'Optimize Route'}
+                </button>
+                <button
+                  onClick={openBulkDeleteModal}
                   disabled={bulkDeleting}
                   className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium"
                 >
@@ -1352,199 +1607,221 @@ function OrdersInner() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200">
-              {paginationData.paginatedRows.map(r => (
-                <tr key={r.id} className={`hover:bg-blue-50 transition-colors ${selectedIds.has(r.id) ? 'bg-blue-50' : ''}`}>
-                  <td className="px-3 py-3 text-center">
-                    <input
-                      type="checkbox"
-                      checked={selectedIds.has(r.id)}
-                      onChange={() => toggleSelect(r.id)}
-                      className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 cursor-pointer"
-                    />
-                  </td>
-                  <td className="px-3 py-3">
-                    <div className="font-semibold text-gray-900">{r.invoice_no || '-'}</div>
-                    <div className="text-[10px] text-gray-500">
-                      {r.created_at.substring(0, 10)} {r.created_at.substring(11, 16)}
-                    </div>
-                  </td>
-                  <td className="px-3 py-3 text-xs">
-                    <div className="font-medium text-gray-900 truncate" title={r.customer_company_name || r.customer_name || r.customer_id || ''}>
-                      {r.customer_company_name || r.customer_name || (r.customer_id ? r.customer_id.substring(0, 10) + '...' : '-')}
-                    </div>
-                    {r.customer_phone && r.customer_phone !== 'nan' && r.customer_phone !== 'NaN' ? (
-                      <div className="text-[10px] text-gray-500">{r.customer_phone.substring(0, 10)}</div>
-                    ) : (
-                      <button
-                        onClick={() => {
-                          setSelectedInvoiceForPhone(r);
-                          setNewPhoneNumber('');
-                          setShowPhoneModal(true);
-                        }}
-                        className="flex items-center gap-1 text-[10px] text-orange-600 hover:text-orange-700 hover:underline"
-                        title="Add phone number"
-                      >
-                        <Edit size={10} />
-                        Add phone
-                      </button>
-                    )}
-                  </td>
-                  <td className="px-3 py-3">
-                    {r.rider_name ? (
-                      <div className="space-y-0.5">
-                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium max-w-full truncate ${
-                          r.rider_assignment_status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
-                          r.rider_assignment_status === 'rejected' ? 'bg-red-100 text-red-800' :
-                          'bg-green-100 text-green-800'
-                        }`} title={r.rider_name}>
-                          {r.rider_name}
-                        </span>
-                        {r.rider_assignment_status === 'pending' && (
-                          <div className="text-[10px] text-yellow-600 font-medium">⏳ Pending acceptance</div>
-                        )}
-                        {r.rider_assignment_status === 'rejected' && (
-                          <div className="text-[10px] text-red-600 font-medium">⏸️ On Hold</div>
-                        )}
+              {paginationData.paginatedRows.map(r => {
+                const createdAt = r.created_at || "";
+                const createdDate = createdAt.substring(0, 10);
+                const createdTime = createdAt.substring(11, 16);
+                const rawStatus = (r.status || r.shipment?.status || "").toLowerCase();
+                const isCancelled = rawStatus === "cancelled";
+                const cancellationText = r.cancellation_reason || r.delivery_notes;
+                const showCancellation = isCancelled || Boolean(cancellationText);
+
+                return (
+                  <tr key={r.id} className={`hover:bg-blue-50 transition-colors ${selectedIds.has(r.id) ? 'bg-blue-50' : ''}`}>
+                    <td className="px-3 py-3 text-center">
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(r.id)}
+                        onChange={() => toggleSelect(r.id)}
+                        className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 cursor-pointer"
+                      />
+                    </td>
+                    <td className="px-3 py-3">
+                      <div className="font-semibold text-gray-900">{r.invoice_no || '-'}</div>
+                      <div className="text-[10px] text-gray-500">
+                        {createdDate} {createdTime}
                       </div>
-                    ) : (
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">No rider</span>
-                    )}
-                  </td>
-                  <td className="px-3 py-3">
-                    {r.shipment ? (
-                      <div className="space-y-0.5">
-                        <div className="font-semibold text-gray-900 text-xs truncate" title={r.shipment.provider_name || r.shipment.provider_code}>{r.shipment.provider_name || r.shipment.provider_code}</div>
-                        <span className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${
-                          r.shipment.status === 'delivered' ? 'bg-green-100 text-green-800' :
-                          r.shipment.status === 'in_transit' ? 'bg-blue-100 text-blue-800' :
-                          'bg-yellow-100 text-yellow-800'
-                        }`}>
-                          {r.shipment.status === 'delivered' ? '✓ Delivered' :
-                           r.shipment.status === 'in_transit' ? '→ In Transit' :
-                           '⏳ Pending'}
-                        </span>
+                      {showCancellation && (
+                        <div className="mt-1 space-y-1">
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-red-100 text-red-700">
+                            Cancelled
+                          </span>
+                          {cancellationText && (
+                            <div className="text-[11px] text-red-600 whitespace-pre-line border-l-2 border-red-200 pl-2">
+                              {cancellationText}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </td>
+                    <td className="px-3 py-3 text-xs">
+                      <div className="font-medium text-gray-900 truncate" title={r.customer_company_name || r.customer_name || r.customer_id || ''}>
+                        {r.customer_company_name || r.customer_name || (r.customer_id ? r.customer_id.substring(0, 10) + '...' : '-')}
                       </div>
-                    ) : (
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">No shipment</span>
-                    )}
-                  </td>
-                  <td className="px-3 py-3">
-                    <div className="flex items-center gap-1">
-                      {r.customer_id && (
-                        <>
-                          <button
-                            onClick={() => { console.log('openInvoiceModal customerId', r.customer_id, 'invoiceId', r.invoice_id); openInvoiceModal(r.customer_id!, r.invoice_id); }}
-                            title="View Invoice"
-                            className="p-1.5 rounded-lg border-2 border-blue-200 bg-blue-50 hover:bg-blue-100 hover:border-blue-300 transition-all"
-                          >
-                            <Eye size={14} className="text-blue-700" />
-                          </button>
-                          <button
-                            onClick={() => openRiderModal(r)}
-                            title={
-                              r.rider_name && r.rider_assignment_status === 'accepted' 
-                                ? "Rider accepted - cannot reassign" 
-                                : r.rider_name && r.rider_assignment_status === 'pending'
-                                ? "Change rider (pending acceptance)"
-                                : r.rider_name && r.rider_assignment_status === 'rejected'
-                                ? "Reassign to different rider"
-                                : "Assign Rider"
-                            }
-                            disabled={!!(r.rider_name && r.rider_assignment_status === 'accepted')}
-                            className={`p-1.5 rounded-lg border-2 transition-all ${
-                              r.rider_name && r.rider_assignment_status === 'accepted'
-                                ? 'border-gray-200 bg-gray-100 cursor-not-allowed opacity-50' 
-                                : r.rider_assignment_status === 'pending'
-                                ? 'border-yellow-200 bg-yellow-50 hover:bg-yellow-100 hover:border-yellow-300'
-                                : r.rider_assignment_status === 'rejected'
-                                ? 'border-orange-200 bg-orange-50 hover:bg-orange-100 hover:border-orange-300'
-                                : 'border-green-200 bg-green-50 hover:bg-green-100 hover:border-green-300'
-                            }`}
-                          >
-                            <Truck size={14} className={
-                              r.rider_name && r.rider_assignment_status === 'accepted' ? 'text-gray-400' : 
-                              r.rider_assignment_status === 'pending' ? 'text-yellow-700' :
-                              r.rider_assignment_status === 'rejected' ? 'text-orange-700' :
-                              'text-green-700'
-                            } />
-                          </button>
-                          <button
-                            onClick={() => openShipmentModal(r)}
-                            title={
-                              r.shipment?.status === 'delivered' ? 'Shipment delivered' :
-                              r.shipment?.tracking_number ? 'Update shipment tracking' :
-                              r.shipment ? 'Add tracking number' :
-                              'Assign shipment provider'
-                            }
-                            className={`p-1.5 rounded-lg border-2 transition-all ${
-                              r.shipment?.status === 'delivered'
-                                ? 'border-green-200 bg-green-100 cursor-default'
-                                : r.shipment?.tracking_number
-                                ? 'border-orange-200 bg-orange-50 hover:bg-orange-100 hover:border-orange-300'
-                                : 'border-purple-200 bg-purple-50 hover:bg-purple-100 hover:border-purple-300'
-                            }`}
-                          >
-                            {r.shipment?.status === 'delivered' ? (
-                              <CheckCircle size={14} className="text-green-700" />
-                            ) : (
-                              <Package size={14} className={r.shipment ? 'text-orange-700' : 'text-purple-700'} />
-                            )}
-                          </button>
-                          <button
-                            onClick={() => openAddressModal(r)}
-                            title={r.shipment?.shipping_address ? 'Update shipping address' : 'Add shipping address'}
-                            className={`p-1.5 rounded-lg border-2 transition-all ${
-                              r.shipment?.shipping_address
-                                ? 'border-indigo-200 bg-indigo-50 hover:bg-indigo-100 hover:border-indigo-300'
-                                : 'border-gray-300 bg-gray-50 hover:bg-gray-100 hover:border-gray-400'
-                            }`}
-                          >
-                            <MapPin size={14} className={r.shipment?.shipping_address ? 'text-indigo-700' : 'text-gray-700'} />
-                          </button>
-                          <button
-                            onClick={async () => {
-                              if (!whatsappEnabled) {
-                                alert('Please enable WhatsApp in Settings first');
-                                return;
-                              }
-                              await fetchLocationFromWhatsApp(r);
-                            }}
-                            title={whatsappEnabled ? "Fetch location from WhatsApp" : "Enable WhatsApp in Settings first"}
-                            className={`p-1.5 rounded-lg border-2 transition-all ${
-                              whatsappEnabled 
-                                ? 'border-green-200 bg-green-50 hover:bg-green-100 hover:border-green-300' 
-                                : 'border-gray-300 bg-gray-100 opacity-50 cursor-not-allowed'
-                            }`}
-                          >
-                            <MessageCircle size={14} className={whatsappEnabled ? 'text-green-700' : 'text-gray-400'} />
-                          </button>
-                          {r.delivery_latitude && r.delivery_longitude && (
+                      {r.customer_phone && r.customer_phone !== 'nan' && r.customer_phone !== 'NaN' ? (
+                        <div className="text-[10px] text-gray-500">{r.customer_phone.substring(0, 10)}</div>
+                      ) : (
+                        <button
+                          onClick={() => {
+                            setSelectedInvoiceForPhone(r);
+                            setNewPhoneNumber('');
+                            setShowPhoneModal(true);
+                          }}
+                          className="flex items-center gap-1 text-[10px] text-orange-600 hover:text-orange-700 hover:underline"
+                          title="Add phone number"
+                        >
+                          <Edit size={10} />
+                          Add phone
+                        </button>
+                      )}
+                    </td>
+                    <td className="px-3 py-3">
+                      {r.rider_name ? (
+                        <div className="space-y-0.5">
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium max-w-full truncate ${
+                            r.rider_assignment_status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
+                            r.rider_assignment_status === 'rejected' ? 'bg-red-100 text-red-800' :
+                            'bg-green-100 text-green-800'
+                          }`} title={r.rider_name}>
+                            {r.rider_name}
+                          </span>
+                          {r.rider_assignment_status === 'pending' && (
+                            <div className="text-[10px] text-yellow-600 font-medium">⏳ Pending acceptance</div>
+                          )}
+                          {r.rider_assignment_status === 'rejected' && (
+                            <div className="text-[10px] text-red-600 font-medium">⏸️ On Hold</div>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">No rider</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-3">
+                      {r.shipment ? (
+                        <div className="space-y-0.5">
+                          <div className="font-semibold text-gray-900 text-xs truncate" title={r.shipment.provider_name || r.shipment.provider_code}>{r.shipment.provider_name || r.shipment.provider_code}</div>
+                          <span className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${
+                            r.shipment.status === 'delivered' ? 'bg-green-100 text-green-800' :
+                            r.shipment.status === 'in_transit' ? 'bg-blue-100 text-blue-800' :
+                            'bg-yellow-100 text-yellow-800'
+                          }`}>
+                            {r.shipment.status === 'delivered' ? '✓ Delivered' :
+                             r.shipment.status === 'in_transit' ? '→ In Transit' :
+                             '⏳ Pending'}
+                          </span>
+                        </div>
+                      ) : (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">No shipment</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-3">
+                      <div className="flex items-center gap-1">
+                        {r.customer_id && (
+                          <>
                             <button
-                              onClick={() => {
-                                const url = `https://www.google.com/maps/dir/?api=1&destination=${r.delivery_latitude},${r.delivery_longitude}`;
-                                window.open(url, '_blank');
-                              }}
-                              title={`Get directions to: ${r.delivery_address || `${r.delivery_latitude}, ${r.delivery_longitude}`}`}
+                              onClick={() => { console.log('openInvoiceModal customerId', r.customer_id, 'invoiceId', r.invoice_id); openInvoiceModal(r.customer_id!, r.invoice_id); }}
+                              title="View Invoice"
                               className="p-1.5 rounded-lg border-2 border-blue-200 bg-blue-50 hover:bg-blue-100 hover:border-blue-300 transition-all"
                             >
-                              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-blue-700">
-                                <path d="M3 11l19-9-9 19-2-8-8-2z" />
-                              </svg>
+                              <Eye size={14} className="text-blue-700" />
                             </button>
-                          )}
-                          <button
-                            onClick={() => deleteInvoice(r.id)}
-                            title="Delete invoice"
-                            className="p-1.5 rounded-lg border-2 border-red-200 bg-red-50 hover:bg-red-100 hover:border-red-300 transition-all"
-                          >
-                            <Trash2 size={14} className="text-red-700" />
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  </td>
+                            <button
+                              onClick={() => openRiderModal(r)}
+                              title={
+                                r.rider_name && r.rider_assignment_status === 'accepted' 
+                                  ? "Rider accepted - cannot reassign" 
+                                  : r.rider_name && r.rider_assignment_status === 'pending'
+                                  ? "Change rider (pending acceptance)"
+                                  : r.rider_name && r.rider_assignment_status === 'rejected'
+                                  ? "Reassign to different rider"
+                                  : "Assign Rider"
+                              }
+                              disabled={!!(r.rider_name && r.rider_assignment_status === 'accepted')}
+                              className={`p-1.5 rounded-lg border-2 transition-all ${
+                                r.rider_name && r.rider_assignment_status === 'accepted'
+                                  ? 'border-gray-200 bg-gray-100 cursor-not-allowed opacity-50' 
+                                  : r.rider_assignment_status === 'pending'
+                                  ? 'border-yellow-200 bg-yellow-50 hover:bg-yellow-100 hover:border-yellow-300'
+                                  : r.rider_assignment_status === 'rejected'
+                                  ? 'border-orange-200 bg-orange-50 hover:bg-orange-100 hover:border-orange-300'
+                                  : 'border-green-200 bg-green-50 hover:bg-green-100 hover:border-green-300'
+                              }`}
+                            >
+                              <Truck size={14} className={
+                                r.rider_name && r.rider_assignment_status === 'accepted' ? 'text-gray-400' : 
+                                r.rider_assignment_status === 'pending' ? 'text-yellow-700' :
+                                r.rider_assignment_status === 'rejected' ? 'text-orange-700' :
+                                'text-green-700'
+                              } />
+                            </button>
+                            <button
+                              onClick={() => openShipmentModal(r)}
+                              title={
+                                r.shipment?.status === 'delivered' ? 'Shipment delivered' :
+                                r.shipment?.tracking_number ? 'Update shipment tracking' :
+                                r.shipment ? 'Add tracking number' :
+                                'Assign shipment provider'
+                              }
+                              className={`p-1.5 rounded-lg border-2 transition-all ${
+                                r.shipment?.status === 'delivered'
+                                  ? 'border-green-200 bg-green-100 cursor-default'
+                                  : r.shipment?.tracking_number
+                                  ? 'border-orange-200 bg-orange-50 hover:bg-orange-100 hover:border-orange-300'
+                                  : 'border-purple-200 bg-purple-50 hover:bg-purple-100 hover:border-purple-300'
+                              }`}
+                            >
+                              {r.shipment?.status === 'delivered' ? (
+                                <CheckCircle size={14} className="text-green-700" />
+                              ) : (
+                                <Package size={14} className={r.shipment ? 'text-orange-700' : 'text-purple-700'} />
+                              )}
+                            </button>
+                            <button
+                              onClick={() => openAddressModal(r)}
+                              title={r.shipment?.shipping_address ? 'Update shipping address' : 'Add shipping address'}
+                              className={`p-1.5 rounded-lg border-2 transition-all ${
+                                r.shipment?.shipping_address
+                                  ? 'border-indigo-200 bg-indigo-50 hover:bg-indigo-100 hover:border-indigo-300'
+                                  : 'border-gray-300 bg-gray-50 hover:bg-gray-100 hover:border-gray-400'
+                              }`}
+                            >
+                              <MapPin size={14} className={r.shipment?.shipping_address ? 'text-indigo-700' : 'text-gray-700'} />
+                            </button>
+                            <button
+                              onClick={async () => {
+                                if (!whatsappEnabled) {
+                                  alert('Please enable WhatsApp in Settings first');
+                                  return;
+                                }
+                                await fetchLocationFromWhatsApp(r);
+                              }}
+                              title={whatsappEnabled ? "Fetch location from WhatsApp" : "Enable WhatsApp in Settings first"}
+                              className={`p-1.5 rounded-lg border-2 transition-all ${
+                                whatsappEnabled 
+                                  ? 'border-green-200 bg-green-50 hover:bg-green-100 hover:border-green-300' 
+                                  : 'border-gray-300 bg-gray-100 opacity-50 cursor-not-allowed'
+                              }`}
+                            >
+                              <MessageCircle size={14} className={whatsappEnabled ? 'text-green-700' : 'text-gray-400'} />
+                            </button>
+                            {r.delivery_latitude && r.delivery_longitude && (
+                              <button
+                                onClick={() => {
+                                  const url = `https://www.google.com/maps/dir/?api=1&destination=${r.delivery_latitude},${r.delivery_longitude}`;
+                                  window.open(url, '_blank');
+                                }}
+                                title={`Get directions to: ${r.delivery_address || `${r.delivery_latitude}, ${r.delivery_longitude}`}`}
+                                className="p-1.5 rounded-lg border-2 border-blue-200 bg-blue-50 hover:bg-blue-100 hover:border-blue-300 transition-all"
+                              >
+                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-blue-700">
+                                  <path d="M3 11l19-9-9 19-2-8-8-2z" />
+                                </svg>
+                              </button>
+                            )}
+                            <button
+                              onClick={() => openDeleteModal(r.id, r.invoice_no || '')}
+                              title="Delete invoice"
+                              className="p-1.5 rounded-lg border-2 border-red-200 bg-red-50 hover:bg-red-100 hover:border-red-300 transition-all"
+                            >
+                              <Trash2 size={14} className="text-red-700" />
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </td>
                 </tr>
-              ))}
+              );
+              })}
             </tbody>
           </table>
           </div>
@@ -2123,6 +2400,187 @@ function OrdersInner() {
                 </p>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Optimize Route Modal */}
+      {showOptimizeModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full max-h-[90vh] flex flex-col">
+            <div className="px-6 py-4 border-b flex items-center justify-between">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900">Optimize Delivery Route</h3>
+                <p className="text-sm text-gray-600 mt-1">
+                  Select a rider to optimize their delivery route
+                </p>
+              </div>
+              <button
+                onClick={() => setShowOptimizeModal(false)}
+                disabled={optimizingRoute}
+                className="text-gray-400 hover:text-gray-600 disabled:opacity-50"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-6">
+              {loadingRiders ? (
+                <div className="flex items-center justify-center py-12">
+                  <div className="text-sm text-gray-600">Loading riders...</div>
+                </div>
+              ) : riders.length === 0 ? (
+                <div className="text-center py-12">
+                  <p className="text-sm text-gray-600">No riders available</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {riders.map((r) => (
+                    <button
+                      key={r.user_id}
+                      onClick={() => optimizeRouteForRider(r.user_id)}
+                      disabled={optimizingRoute}
+                      className="w-full p-4 border-2 border-gray-200 rounded-lg hover:border-green-500 hover:bg-green-50 transition-all text-left disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className="font-medium text-gray-900">{r.name || r.email}</div>
+                          {r.cellnumber && (
+                            <div className="text-sm text-gray-600 mt-1">📱 {r.cellnumber}</div>
+                          )}
+                          {r.assigned_count !== undefined && (
+                            <div className="text-xs text-gray-500 mt-1">
+                              Currently assigned: {r.assigned_count} order(s)
+                            </div>
+                          )}
+                        </div>
+                        <MapPin size={20} className="text-green-500" />
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {optimizingRoute && (
+              <div className="px-6 py-4 border-t bg-green-50">
+                <p className="text-sm text-green-900 font-medium text-center">
+                  Optimizing delivery route...
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {showDeleteModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
+            <div className="px-6 py-4 border-b">
+              <h3 className="text-lg font-semibold text-gray-900">Delete Invoice</h3>
+            </div>
+            <div className="px-6 py-4">
+              <p className="text-sm text-gray-600 mb-4">
+                Are you sure you want to delete invoice <span className="font-semibold text-gray-900">{deleteInvoiceNo}</span>?
+              </p>
+              <p className="text-sm text-red-600 font-medium mb-4">
+                This action cannot be undone!
+              </p>
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Type <span className="font-bold text-red-600">DELETE</span> to confirm:
+                </label>
+                <input
+                  type="text"
+                  value={deleteConfirmText}
+                  onChange={(e) => setDeleteConfirmText(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                  placeholder="DELETE"
+                  autoFocus
+                />
+              </div>
+            </div>
+            <div className="px-6 py-4 border-t bg-gray-50 flex gap-3 justify-end">
+              <button
+                onClick={() => {
+                  setShowDeleteModal(false);
+                  setDeleteInvoiceId(null);
+                  setDeleteInvoiceNo("");
+                  setDeleteConfirmText("");
+                }}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
+                disabled={deleting}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmDelete}
+                disabled={deleteConfirmText.toUpperCase() !== 'DELETE' || deleting}
+                className={`px-4 py-2 text-sm font-medium text-white rounded-lg ${
+                  deleteConfirmText.toUpperCase() === 'DELETE' && !deleting
+                    ? 'bg-red-600 hover:bg-red-700'
+                    : 'bg-gray-400 cursor-not-allowed'
+                }`}
+              >
+                {deleting ? 'Deleting...' : 'Delete Invoice'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Delete Confirmation Modal */}
+      {showBulkDeleteModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
+            <div className="px-6 py-4 border-b">
+              <h3 className="text-lg font-semibold text-gray-900">Delete Multiple Invoices</h3>
+            </div>
+            <div className="px-6 py-4">
+              <p className="text-sm text-gray-600 mb-4">
+                Are you sure you want to delete <span className="font-semibold text-gray-900">{selectedIds.size} selected invoice(s)</span>?
+              </p>
+              <p className="text-sm text-red-600 font-medium mb-4">
+                This action cannot be undone!
+              </p>
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Type <span className="font-bold text-red-600">DELETE</span> to confirm:
+                </label>
+                <input
+                  type="text"
+                  value={bulkDeleteConfirmText}
+                  onChange={(e) => setBulkDeleteConfirmText(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                  placeholder="DELETE"
+                  autoFocus
+                />
+              </div>
+            </div>
+            <div className="px-6 py-4 border-t bg-gray-50 flex gap-3 justify-end">
+              <button
+                onClick={() => {
+                  setShowBulkDeleteModal(false);
+                  setBulkDeleteConfirmText("");
+                }}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
+                disabled={bulkDeleting}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmBulkDelete}
+                disabled={bulkDeleteConfirmText.toUpperCase() !== 'DELETE' || bulkDeleting}
+                className={`px-4 py-2 text-sm font-medium text-white rounded-lg ${
+                  bulkDeleteConfirmText.toUpperCase() === 'DELETE' && !bulkDeleting
+                    ? 'bg-red-600 hover:bg-red-700'
+                    : 'bg-gray-400 cursor-not-allowed'
+                }`}
+              >
+                {bulkDeleting ? 'Deleting...' : `Delete ${selectedIds.size} Invoice(s)`}
+              </button>
+            </div>
           </div>
         </div>
       )}

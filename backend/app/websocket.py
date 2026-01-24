@@ -16,7 +16,7 @@ class ConnectionManager:
         self.active_connections: Dict[str, Set[WebSocket]] = {}
     
     async def connect(self, websocket: WebSocket, org_id: str):
-        await websocket.accept()
+        # Don't accept here - already accepted in main.py handler
         if org_id not in self.active_connections:
             self.active_connections[org_id] = set()
         self.active_connections[org_id].add(websocket)
